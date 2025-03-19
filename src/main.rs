@@ -21,6 +21,11 @@ async fn main() {
 
     // send initialize request
     communicater.initialize().await.unwrap();
+    communicater.get_all_function_list().await.unwrap();
     communicater.get_main_function_location().await.unwrap();
+
     communicater.shutdown().await.unwrap();
+
+    // Wait for the child process to exit
+    let _ = child.wait().await.expect("Failed to wait on child");
 }

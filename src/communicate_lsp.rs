@@ -1,6 +1,11 @@
-use lsp_types::{ClientCapabilities, InitializeParams, Url, WorkspaceFolder};
-use serde::Deserialize;
-use serde::Serialize;
+use lsp_types::DocumentSymbol;
+use lsp_types::SymbolKind;
+use lsp_types::{
+    ClientCapabilities, InitializeParams, SymbolKindCapability, TextDocumentClientCapabilities,
+    Url, WorkspaceFolder,
+};
+use lsp_types::{WorkspaceClientCapabilities, WorkspaceSymbolClientCapabilities};
+use serde::{Deserialize, Serialize};
 use std::fs;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
@@ -42,43 +47,98 @@ enum Response {
     ResponseError(ResponseError),
 }
 
+struct MesssageFuctory {
+    id: i32,
+}
+
+impl MesssageFuctory {
+    pub fn new() -> Self {
+        MesssageFuctory { id: 0 }
+    }
+
+    pub fn get_id(&mut self) -> i32 {
+        self.id += 1;
+        self.id
+    }
+
+    pub fn create_request<T: Serialize>(&mut self, method: &str, params: Option<T>) -> Request {
+        Request {
+            jsonrpc: "2.0".to_string(),
+            id: self.get_id(),
+            method: method.to_string(),
+            params: params.map(|p| serde_json::to_value(p).unwrap()),
+        }
+    }
+
+    pub fn create_notification<T: Serialize>(
+        &mut self,
+        method: &str,
+        params: Option<T>,
+    ) -> Notification {
+        Notification {
+            jsonrpc: "2.0".to_string(),
+            method: method.to_string(),
+            params: params.map(|p| serde_json::to_value(p).unwrap()),
+        }
+    }
+}
 pub struct CommunicateLSP {
     writer: ChildStdin,
     reader: BufReader<ChildStdout>,
+    factory: MesssageFuctory,
 }
 
 impl CommunicateLSP {
     pub fn new(writer: ChildStdin, reader: BufReader<ChildStdout>) -> Self {
-        CommunicateLSP { writer, reader }
+        CommunicateLSP {
+            writer,
+            reader,
+            factory: MesssageFuctory::new(),
+        }
     }
 
     pub async fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let initialize_params = InitializeParams {
             process_id: Some(std::process::id()),
             workspace_folders: Some(vec![WorkspaceFolder {
-                uri: Url::parse("file:///c:/Users/PCuser/Work/rust/sample-lsp/sample3/")?,
-                name: String::from("sample3"),
+                uri: Url::parse("file:///c:/Users/PCuser/Work/rust/gen_callgraph")?,
+                name: String::from("gen_callgraph"),
             }]),
-            capabilities: ClientCapabilities::default(),
+            capabilities: ClientCapabilities {
+                workspace: Some(WorkspaceClientCapabilities {
+                    symbol: Some(WorkspaceSymbolClientCapabilities {
+                        dynamic_registration: Some(true),
+                        symbol_kind: None,
+                        ..WorkspaceSymbolClientCapabilities::default()
+                    }),
+                    ..WorkspaceClientCapabilities::default()
+                }),
+                text_document: Some(TextDocumentClientCapabilities {
+                    document_symbol: Some(lsp_types::DocumentSymbolClientCapabilities {
+                        dynamic_registration: Some(true),
+                        symbol_kind: Some(SymbolKindCapability {
+                            value_set: Some(vec![SymbolKind::FUNCTION]),
+                            ..SymbolKindCapability::default()
+                        }),
+                        hierarchical_document_symbol_support: Some(true),
+                        ..lsp_types::DocumentSymbolClientCapabilities::default()
+                    }),
+                    ..TextDocumentClientCapabilities::default()
+                }),
+                ..ClientCapabilities::default()
+            },
             ..InitializeParams::default()
         };
         let initialize_params = initialize_params;
 
-        let request = Request {
-            jsonrpc: "2.0".to_string(),
-            id: 1,
-            method: "initialize".to_string(),
-            params: Some(serde_json::to_value(&initialize_params)?),
-        };
+        let request = self
+            .factory
+            .create_request("initialize", Some(initialize_params));
 
         send_message(&mut self.writer, &request).await?;
         recieve_response(&mut self.reader).await?;
 
-        let initialized_notification: Notification = Notification {
-            jsonrpc: "2.0".to_string(),
-            method: "initialized".to_string(),
-            params: Some(serde_json::json!({})),
-        };
+        let initialized_notification = self.factory.create_notification("initialized", Some(""));
 
         send_message(&mut self.writer, &initialized_notification)
             .await
@@ -88,30 +148,44 @@ impl CommunicateLSP {
     }
 
     pub async fn shutdown(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let request = Request {
-            jsonrpc: "2.0".to_string(),
-            id: 2,
-            method: "shutdown".to_string(),
-            params: None,
-        };
+        let request = self.factory.create_request("shutdown", Some(""));
 
         send_message(&mut self.writer, &request).await?;
         recieve_response(&mut self.reader).await?;
 
-        let notification = Notification {
-            jsonrpc: "2.0".to_string(),
-            method: "exit".to_string(),
-            params: None,
-        };
-
+        let notification = self.factory.create_notification("exit", Some(""));
         send_message(&mut self.writer, &notification).await?;
+
+        Ok(())
+    }
+
+    pub async fn get_all_function_list(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let request = self.factory.create_request(
+            "workspace/symbol",
+            Some(serde_json::json!({
+                "query": ""
+            })),
+        );
+
+        send_message(&mut self.writer, &request).await.unwrap();
+        let response = recieve_response(&mut self.reader).await.unwrap();
+
+        match response {
+            Response::ResponseMessage(response) => {
+                println!("{:#?}", response.result.unwrap());
+            }
+            Response::ResponseError(response) => {
+                println!("{:#?}", response.error.unwrap());
+            }
+        }
 
         Ok(())
     }
 
     pub async fn get_main_function_location(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // send textDocumetn/didOpen notification
-        let file_path = "c:/Users/PCuser/Work/rust/sample-lsp/sample3/src/main.rs";
+
+        let file_path = "c:/Users/PCuser/Work/rust/gen_callgraph/src/communicate_lsp.rs";
         let file_contents = fs::read_to_string(file_path).unwrap();
 
         let did_open_notification = serde_json::json!({
@@ -132,13 +206,14 @@ impl CommunicateLSP {
             .unwrap();
 
         // send textDocument/documentSymbol request
+
         let request = Request {
             jsonrpc: "2.0".to_string(),
             id: 3,
             method: "textDocument/documentSymbol".to_string(),
             params: Some(serde_json::json!({
                 "textDocument": {
-                    "uri": "file:///c:/Users/PCuser/Work/rust/sample-lsp/sample3/src/main.rs"
+                    "uri": "file:///c:/Users/PCuser/Work/rust/gen_callgraph/src/communicate_lsp.rs"
                 }
             })),
         };
@@ -148,12 +223,87 @@ impl CommunicateLSP {
 
         match response {
             Response::ResponseMessage(response) => {
+                let symbols: Vec<DocumentSymbol> =
+                    serde_json::from_value(response.result.unwrap()).unwrap();
+
+                for symbol in symbols {
+                    println!("{:#?}", symbol);
+                }
+
+                //println!("{:#?}", response.result.unwrap());
+            }
+            Response::ResponseError(response) => {
+                println!("{:#?}", response.error.unwrap());
+            }
+        }
+
+        let request = Request {
+            jsonrpc: "2.0".to_string(),
+            id: 4,
+            method: "textDocument/prepareCallHierarchy".to_string(),
+            params: Some(serde_json::json!({
+                "textDocument": {
+                    "uri": "file:///c:/Users/PCuser/Work/rust/gen_callgraph/src/communicate_lsp.rs"
+                },
+                "position": {
+                    "line": 0,
+                    "character": 0
+                }
+            })),
+        };
+
+        send_message(&mut self.writer, &request).await.unwrap();
+        let response = recieve_response(&mut self.reader).await.unwrap();
+        match response {
+            Response::ResponseMessage(response) => {
                 println!("{:#?}", response.result.unwrap());
             }
             Response::ResponseError(response) => {
-                println!("{:?}", response.error.unwrap());
+                println!("{:#?}", response.error.unwrap());
             }
         }
+
+        /*
+                let request = Request {
+                    jsonrpc: "2.0".to_string(),
+                    id: 4,
+                    method: "workspace/workspaceFolders".to_string(),
+                    params: None,
+                };
+
+                send_message(&mut self.writer, &request).await.unwrap();
+                let response = recieve_response(&mut self.reader).await.unwrap();
+                match response {
+                    Response::ResponseMessage(response) => {
+                        println!("{:#?}", response.result.unwrap());
+                    }
+                    Response::ResponseError(response) => {
+                        println!("{:#?}", response.error.unwrap());
+                    }
+                }
+
+                let request = Request {
+                    jsonrpc: "2.0".to_string(),
+                    id: 3,
+                    method: "workspace/symbol".to_string(),
+                    params: Some(serde_json::json!({
+                        "query": "main",
+                    })),
+                };
+
+                send_message(&mut self.writer, &request).await.unwrap();
+                let response = recieve_response(&mut self.reader).await.unwrap();
+
+                match response {
+                    Response::ResponseMessage(response) => {
+                        println!("{:#?}", response.result.unwrap());
+                    }
+                    Response::ResponseError(response) => {
+                        println!("{:#?}", response.error.unwrap());
+                    }
+                }
+        1        */
+
         Ok(())
     }
 }
