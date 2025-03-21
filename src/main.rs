@@ -1,31 +1,29 @@
-mod communicate_lsp;
+mod code_analysis;
+mod lsp_client;
 
-//use lsp_types::InitializeResult;
-use std::process::Stdio;
+use code_analysis::CodeAnalyzer;
+use lsp_client::LspClient;
 use tokio::io::BufReader;
 use tokio::process::Command;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut child = Command::new("rust-analyzer")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
         .spawn()
-        .expect("Failed to execute command");
+        .expect("Failed to start rust-analyzer");
 
     let writer = child.stdin.take().unwrap();
     let reader = BufReader::new(child.stdout.take().unwrap());
 
-    let mut communicater = communicate_lsp::CommunicateLSP::new(writer, reader);
+    let lsp_client = LspClient::new(writer, reader);
+    let mut code_analyzer = CodeAnalyzer::new(lsp_client);
 
-    // send initialize request
-    communicater.initialize().await.unwrap();
-    communicater.get_all_function_list().await.unwrap();
-    communicater.get_main_function_location().await.unwrap();
+    code_analyzer.initialize().await?;
+    code_analyzer.get_all_function_list().await?;
+    code_analyzer.shutdown().await?;
 
-    communicater.shutdown().await.unwrap();
-
-    // Wait for the child process to exit
-    let _ = child.wait().await.expect("Failed to wait on child");
+    Ok(())
 }

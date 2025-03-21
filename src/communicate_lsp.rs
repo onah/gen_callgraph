@@ -5,47 +5,9 @@ use lsp_types::{
     Url, WorkspaceFolder,
 };
 use lsp_types::{WorkspaceClientCapabilities, WorkspaceSymbolClientCapabilities};
-use serde::{Deserialize, Serialize};
 use std::fs;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
-use tokio::io::BufReader;
-use tokio::process::ChildStdin;
-use tokio::process::ChildStdout;
 
-#[derive(Serialize, Deserialize)]
-struct Request {
-    jsonrpc: String,
-    id: i32,
-    method: String,
-    params: Option<serde_json::Value>,
-}
 
-#[derive(Serialize, Deserialize, Debug)]
-struct Notification {
-    jsonrpc: String,
-    method: String,
-    params: Option<serde_json::Value>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct ResponseMessage {
-    jsonrpc: String,
-    id: i32,
-    result: Option<serde_json::Value>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct ResponseError {
-    jsonrpc: String,
-    id: i32,
-    error: Option<serde_json::Value>,
-}
-
-enum Response {
-    ResponseMessage(ResponseMessage),
-    ResponseError(ResponseError),
-}
 
 struct MesssageFuctory {
     id: i32,
@@ -141,7 +103,7 @@ impl CommunicateLSP {
         let initialized_notification = self.factory.create_notification("initialized", Some(""));
 
         send_message(&mut self.writer, &initialized_notification)
-            .await
+            .await;
             .unwrap();
 
         Ok(())
