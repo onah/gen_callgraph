@@ -3,6 +3,7 @@ mod lsp_client;
 
 use code_analysis::CodeAnalyzer;
 use lsp_client::LspClient;
+//use std::{thread, time};
 use tokio::io::BufReader;
 use tokio::process::Command;
 
@@ -22,7 +23,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut code_analyzer = CodeAnalyzer::new(lsp_client);
 
     code_analyzer.initialize().await?;
+
+    //thread::sleep(time::Duration::from_secs(10));
+
     code_analyzer.get_all_function_list().await?;
+    code_analyzer.get_main_function_location().await?;
     code_analyzer.shutdown().await?;
 
     Ok(())

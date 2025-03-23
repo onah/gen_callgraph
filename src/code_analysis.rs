@@ -1,4 +1,4 @@
-use crate::lsp_client::{LspClient, Request, Response};
+use crate::lsp_client::{LspClient, Message, Request};
 use lsp_types::DocumentSymbol;
 
 use lsp_types::{
@@ -98,7 +98,7 @@ impl CodeAnalyzer {
             .create_request("initialize", Some(initialize_params));
 
         self.client.send_message(&request).await?;
-        self.client.receive_response().await?;
+        self.client.receive_message().await?;
 
         let initialized_notification = self.factory.create_notification("initialized", Some(""));
         self.client.send_message(&initialized_notification).await?;
@@ -113,10 +113,10 @@ impl CodeAnalyzer {
         );
 
         self.client.send_message(&request).await?;
-        let response = self.client.receive_response().await?;
+        let response = self.client.receive_message().await?;
 
         match response {
-            Response::ResponseMessage(response) => {
+            Message::ResponseMessage(response) => {
                 //println!("{:#?}", response);
 
                 let symbols: Vec<lsp_types::SymbolInformation> =
@@ -130,8 +130,11 @@ impl CodeAnalyzer {
                     }
                 }
             }
-            Response::ResponseError(response) => {
+            Message::ResponseError(response) => {
                 println!("Error: {:#?}", response.error.unwrap());
+            }
+            Message::Notification(notification) => {
+                println!("{:#?}", notification);
             }
         }
 
@@ -142,7 +145,7 @@ impl CodeAnalyzer {
         let request = self.factory.create_request("shutdown", Some(""));
 
         self.client.send_message(&request).await?;
-        let _response = self.client.receive_response().await?;
+        let _response = self.client.receive_message().await?;
 
         let notification = self.factory.create_notification("exit", Some(""));
         self.client.send_message(&notification).await?;
@@ -188,10 +191,10 @@ impl CodeAnalyzer {
         };
 
         self.client.send_message(&request).await.unwrap();
-        let response = self.client.receive_response().await?;
+        let response = self.client.receive_message().await?;
 
         match response {
-            Response::ResponseMessage(response) => {
+            Message::ResponseMessage(response) => {
                 let symbols: Vec<DocumentSymbol> =
                     serde_json::from_value(response.result.unwrap()).unwrap();
 
@@ -201,8 +204,11 @@ impl CodeAnalyzer {
 
                 //println!("{:#?}", response.result.unwrap());
             }
-            Response::ResponseError(response) => {
+            Message::ResponseError(response) => {
                 println!("{:#?}", response.error.unwrap());
+            }
+            Message::Notification(notification) => {
+                println!("{:#?}", notification);
             }
         }
 
@@ -222,13 +228,16 @@ impl CodeAnalyzer {
         };
 
         self.client.send_message(&request).await?;
-        let response = self.client.receive_response().await?;
+        let response = self.client.receive_message().await?;
         match response {
-            Response::ResponseMessage(response) => {
+            Message::ResponseMessage(response) => {
                 println!("{:#?}", response.result.unwrap());
             }
-            Response::ResponseError(response) => {
+            Message::ResponseError(response) => {
                 println!("{:#?}", response.error.unwrap());
+            }
+            Message::Notification(notification) => {
+                println!("{:#?}", notification);
             }
         }
         Ok(())

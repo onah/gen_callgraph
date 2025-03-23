@@ -24,9 +24,16 @@ pub struct ResponseError {
     pub error: Option<serde_json::Value>,
 }
 
-pub enum Response {
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Notification {
+    pub jsonrpc: String,
+    pub method: String,
+    pub params: Option<serde_json::Value>,
+}
+pub enum Message {
     ResponseMessage(ResponseMessage),
     ResponseError(ResponseError),
+    Notification(Notification),
 }
 
 pub struct LspClient {
@@ -56,31 +63,65 @@ impl LspClient {
         Ok(())
     }
 
-    pub async fn receive_response(&mut self) -> Result<Response, Box<dyn std::error::Error>> {
+    pub async fn receive_message(&mut self) -> Result<Message, Box<dyn std::error::Error>> {
+        let buffer = self.read_message_buffer().await?;
+        let json: serde_json::Value = serde_json::from_str(&buffer)?;
+
+        if let Some(notification) = self.parse_notification(&json)? {
+            return Ok(Message::Notification(notification));
+        }
+
+        if let Some(response) = self.parse_response(&json)? {
+            return Ok(response);
+        }
+
+        Err("Invalid header".into())
+    }
+
+    async fn read_message_buffer(&mut self) -> Result<String, Box<dyn std::error::Error>> {
         let mut length = vec![0; 1024];
         let count = self.reader.read(&mut length).await?;
         let length_str = String::from_utf8_lossy(&length[..count]);
 
-        if length_str.starts_with("Content-Length: ") {
-            let content_length = &length_str[16..];
-            let content_length = content_length.trim().parse::<usize>()?;
-
-            let mut buffer = vec![0; content_length];
-            let count = self.reader.read(&mut buffer).await?;
-            let buffer = buffer[..count].to_vec();
-            let buffer = String::from_utf8(buffer)?;
-
-            let response: ResponseMessage = serde_json::from_str(&buffer)?;
-            //println!("Response: {:#?}", response);
-
-            if response.result.is_some() {
-                return Ok(Response::ResponseMessage(response));
-            } else {
-                let response: ResponseError = serde_json::from_str(&buffer)?;
-                return Ok(Response::ResponseError(response));
-            }
-        } else {
-            Err("Invalid header".into())
+        if !length_str.starts_with("Content-Length: ") {
+            return Err("Invalid header".into());
         }
+
+        let content_length = &length_str[16..];
+        let content_length = content_length.trim().parse::<usize>()?;
+
+        let mut buffer = vec![0; content_length];
+        let count = self.reader.read(&mut buffer).await?;
+        let buffer = buffer[..count].to_vec();
+        let buffer = String::from_utf8(buffer)?;
+
+        Ok(buffer)
+    }
+
+    fn parse_notification(
+        &self,
+        json: &serde_json::Value,
+    ) -> Result<Option<Notification>, Box<dyn std::error::Error>> {
+        if json.get("method").is_some() {
+            let notification: Notification = serde_json::from_value(json.clone())?;
+            return Ok(Some(notification));
+        }
+        Ok(None)
+    }
+
+    fn parse_response(
+        &self,
+        json: &serde_json::Value,
+    ) -> Result<Option<Message>, Box<dyn std::error::Error>> {
+        if json.get("id").is_some() {
+            if json.get("result").is_some() {
+                let response: ResponseMessage = serde_json::from_value(json.clone())?;
+                return Ok(Some(Message::ResponseMessage(response)));
+            } else {
+                let response: ResponseError = serde_json::from_value(json.clone())?;
+                return Ok(Some(Message::ResponseError(response)));
+            }
+        }
+        Ok(None)
     }
 }
