@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+// use tokio::io::AsyncBufReadExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
 
@@ -75,27 +76,54 @@ impl LspClient {
             return Ok(response);
         }
 
-        Err("Invalid header".into())
+        Err("Other Message".into())
     }
 
     async fn read_message_buffer(&mut self) -> Result<String, Box<dyn std::error::Error>> {
-        let mut length = vec![0; 1024];
-        let count = self.reader.read(&mut length).await?;
-        let length_str = String::from_utf8_lossy(&length[..count]);
+        let mut header_buffer = Vec::new();
 
-        if !length_str.starts_with("Content-Length: ") {
-            return Err("Invalid header".into());
+        // `&mut self.reader`を直接使用
+        loop {
+            let mut byte = [0; 1];
+            self.reader.read_exact(&mut byte).await?;
+            header_buffer.push(byte[0]);
+
+            // ヘッダーの終わりを検出
+            if header_buffer.ends_with(b"\r\n\r\n") {
+                break;
+            }
         }
 
-        let content_length = &length_str[16..];
-        let content_length = content_length.trim().parse::<usize>()?;
+        // ヘッダーを文字列に変換
+        let header_str = String::from_utf8(header_buffer)?;
+        println!("Header: {}", header_str);
 
-        let mut buffer = vec![0; content_length];
-        let count = self.reader.read(&mut buffer).await?;
-        let buffer = buffer[..count].to_vec();
-        let buffer = String::from_utf8(buffer)?;
+        // Content-Lengthを取得
+        let content_length = self.get_content_length(&header_str)?;
+        println!("Parsed Content-Length: {}", content_length);
 
-        Ok(buffer)
+        // ペイロード部分を読み取る
+        let mut payload_buffer = vec![0; content_length];
+        self.reader.read_exact(&mut payload_buffer).await?;
+
+        // ペイロードを文字列に変換
+        Ok(String::from_utf8(payload_buffer)?)
+    }
+
+    fn get_content_length(&self, header: &str) -> Result<usize, Box<dyn std::error::Error>> {
+        // "Content-Length: " で始まる行を探す
+        if let Some(content_length_line) = header
+            .lines()
+            .find(|line| line.starts_with("Content-Length: "))
+        {
+            // "Content-Length: " の部分を取り除き、数値部分を抽出
+            let content_length = content_length_line["Content-Length: ".len()..]
+                .trim() // 前後の空白を削除
+                .parse::<usize>()?; // 数値に変換
+            Ok(content_length)
+        } else {
+            Err("Content-Length header not found".into())
+        }
     }
 
     fn parse_notification(
