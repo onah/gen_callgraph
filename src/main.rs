@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let lsp_client = LspClient::new(writer, reader);
     let mut code_analyzer = CodeAnalyzer::new(lsp_client);
 
-    let result = async {
+    let _result = async {
         match code_analyzer.initialize().await {
             Ok(_) => println!("Initialization Success"),
             Err(e) => eprintln!("Initialization Error: {:?}", e),

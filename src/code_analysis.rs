@@ -50,42 +50,6 @@ impl MesssageFuctory {
     }
 }
 
-use std::sync::{Arc, Mutex};
-use tokio::sync::Notify;
-
-#[derive(Clone)]
-pub struct ProgressTracker {
-    notify: Arc<Notify>,
-    is_complete: Arc<Mutex<bool>>,
-}
-
-impl ProgressTracker {
-    pub fn new() -> Self {
-        ProgressTracker {
-            notify: Arc::new(Notify::new()),
-            is_complete: Arc::new(Mutex::new(false)),
-        }
-    }
-
-    pub fn mark_complete(&self) {
-        let mut complete = self.is_complete.lock().unwrap();
-        *complete = true;
-        self.notify.notify_waiters();
-    }
-
-    pub async fn wait_for_completion(&self) {
-        loop {
-            {
-                let complete = self.is_complete.lock().unwrap();
-                if *complete {
-                    break;
-                }
-            }
-            self.notify.notified().await;
-        }
-    }
-}
-
 pub struct CodeAnalyzer {
     client: LspClient,
     factory: MesssageFuctory,
@@ -155,7 +119,7 @@ impl CodeAnalyzer {
             println!("End get all function list");
 
             match response {
-                Message::ResponseMessage(response) => {
+                Message::Response(response) => {
                     println!("ResponseMessage: {:#?}", response);
 
                     let symbols: Vec<lsp_types::SymbolInformation> =
@@ -170,7 +134,7 @@ impl CodeAnalyzer {
                     }
                     break;
                 }
-                Message::ResponseError(response) => {
+                Message::Error(response) => {
                     println!("Error: {:#?}", response.error.unwrap());
                     break;
                 }
@@ -195,7 +159,7 @@ impl CodeAnalyzer {
         Ok(())
     }
 
-    pub async fn get_main_function_location(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn _get_main_function_location(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // send textDocumetn/didOpen notification
 
         let file_path = "c:/Users/PCuser/Work/rust/gen_callgraph/src/communicate_lsp.rs";
@@ -236,7 +200,7 @@ impl CodeAnalyzer {
         let response = self.client.receive_message().await?;
 
         match response {
-            Message::ResponseMessage(response) => {
+            Message::Response(response) => {
                 let symbols: Vec<DocumentSymbol> =
                     serde_json::from_value(response.result.unwrap()).unwrap();
 
@@ -246,7 +210,7 @@ impl CodeAnalyzer {
 
                 //println!("{:#?}", response.result.unwrap());
             }
-            Message::ResponseError(response) => {
+            Message::Error(response) => {
                 println!("{:#?}", response.error.unwrap());
             }
             Message::Notification(notification) => {
@@ -272,10 +236,10 @@ impl CodeAnalyzer {
         self.client.send_message(&request).await?;
         let response = self.client.receive_message().await?;
         match response {
-            Message::ResponseMessage(response) => {
+            Message::Response(response) => {
                 println!("{:#?}", response.result.unwrap());
             }
-            Message::ResponseError(response) => {
+            Message::Error(response) => {
                 println!("{:#?}", response.error.unwrap());
             }
             Message::Notification(notification) => {
@@ -284,66 +248,4 @@ impl CodeAnalyzer {
         }
         Ok(())
     }
-
-    pub async fn wait_process(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let tracker = ProgressTracker::new();
-
-        loop {
-            println!("Waiting for progress...");
-            let message = self.client.receive_message().await?;
-
-            match message {
-                Message::Notification(notification) => {
-                    if notification.method == "$/progress" {
-                        if let Some(params) = notification.params {
-                            if let Ok(progress) = serde_json::from_value::<ProgressParams>(params) {
-                                match progress.value.kind.as_str() {
-                                    "begin" => {
-                                        println!("Progress started: {}", progress.value.title);
-                                    }
-                                    "report" => {
-                                        if let Some(percentage) = progress.value.percentage {
-                                            println!(
-                                                "Progress update: {} ({}%)",
-                                                progress.value.message.unwrap_or_default(),
-                                                percentage
-                                            );
-                                        }
-                                    }
-                                    "end" => {
-                                        println!("Progress ended: {}", progress.value.title);
-                                        tracker.mark_complete();
-                                        break;
-                                    }
-                                    _ => {
-                                        println!("Unknown progress kind: {}", progress.value.kind);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => {
-                    // 他のメッセージは無視
-                }
-            }
-        }
-
-        tracker.wait_for_completion().await;
-        Ok(())
-    }
-}
-
-#[derive(Deserialize, Debug)]
-struct ProgressParams {
-    token: String,
-    value: ProgressValue,
-}
-
-#[derive(Deserialize, Debug)]
-struct ProgressValue {
-    kind: String,            // "begin", "report", "end"
-    title: String,           // 進捗のタイトル
-    message: Option<String>, // 進捗のメッセージ
-    percentage: Option<u8>,  // 進捗のパーセンテージ
 }

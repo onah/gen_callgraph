@@ -32,8 +32,8 @@ pub struct Notification {
     pub params: Option<serde_json::Value>,
 }
 pub enum Message {
-    ResponseMessage(ResponseMessage),
-    ResponseError(ResponseError),
+    Response(ResponseMessage),
+    Error(ResponseError),
     Notification(Notification),
 }
 
@@ -144,10 +144,10 @@ impl LspClient {
         if json.get("id").is_some() {
             if json.get("result").is_some() {
                 let response: ResponseMessage = serde_json::from_value(json.clone())?;
-                return Ok(Some(Message::ResponseMessage(response)));
+                return Ok(Some(Message::Response(response)));
             } else {
                 let response: ResponseError = serde_json::from_value(json.clone())?;
-                return Ok(Some(Message::ResponseError(response)));
+                return Ok(Some(Message::Error(response)));
             }
         }
         Ok(None)
