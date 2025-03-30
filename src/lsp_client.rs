@@ -37,6 +37,42 @@ pub enum Message {
     Notification(Notification),
 }
 
+pub struct MesssageFuctory {
+    id: i32,
+}
+
+impl MesssageFuctory {
+    pub fn new() -> Self {
+        MesssageFuctory { id: 0 }
+    }
+
+    pub fn get_id(&mut self) -> i32 {
+        self.id += 1;
+        self.id
+    }
+
+    pub fn create_request<T: Serialize>(&mut self, method: &str, params: Option<T>) -> Request {
+        Request {
+            jsonrpc: "2.0".to_string(),
+            id: self.get_id(),
+            method: method.to_string(),
+            params: params.map(|p| serde_json::to_value(p).unwrap()),
+        }
+    }
+
+    pub fn create_notification<T: Serialize>(
+        &mut self,
+        method: &str,
+        params: Option<T>,
+    ) -> Notification {
+        Notification {
+            jsonrpc: "2.0".to_string(),
+            method: method.to_string(),
+            params: params.map(|p| serde_json::to_value(p).unwrap()),
+        }
+    }
+}
+
 pub struct LspClient {
     writer: ChildStdin,
     reader: BufReader<ChildStdout>,
