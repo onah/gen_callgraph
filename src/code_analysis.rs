@@ -1,4 +1,4 @@
-use crate::lsp_client::{LspClient, Message, MesssageFuctory, Request};
+use crate::lsp::communicator::{LspClient, Message, MesssageFuctory, Request};
 use lsp_types::DocumentSymbol;
 
 use lsp_types::{

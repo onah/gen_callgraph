@@ -1,8 +1,8 @@
 mod code_analysis;
-mod lsp_client;
+mod lsp;
 
 use code_analysis::CodeAnalyzer;
-use lsp_client::LspClient;
+use lsp::communicator::LspClient;
 use std::{thread, time};
 use tokio::io::BufReader;
 use tokio::process::Command;
