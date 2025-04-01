@@ -2,7 +2,7 @@ mod code_analysis;
 mod lsp;
 
 use code_analysis::CodeAnalyzer;
-use lsp::communicator::LspClient;
+use lsp::communicator::Communicator;
 use std::{thread, time};
 use tokio::io::BufReader;
 use tokio::process::Command;
@@ -19,7 +19,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let writer = child.stdin.take().unwrap();
     let reader = BufReader::new(child.stdout.take().unwrap());
 
-    let lsp_client = LspClient::new(writer, reader);
+    let communicator = Communicator::new(writer, reader);
+    let lsp_client = lsp::LspClient::new(communicator);
     let mut code_analyzer = CodeAnalyzer::new(lsp_client);
 
     let _result = async {

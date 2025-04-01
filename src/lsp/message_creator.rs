@@ -34,6 +34,11 @@ pub enum Message {
     Notification(Notification),
 }
 
+pub enum SendMessage {
+    Request(Request),
+    Notification(Notification),
+}
+
 pub struct MesssageFuctory {
     id: i32,
 }

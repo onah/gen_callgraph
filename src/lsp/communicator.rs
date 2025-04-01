@@ -1,24 +1,29 @@
 use crate::lsp::message_creator::{Message, Notification, ResponseError, ResponseMessage};
-use serde::Serialize;
+//use serde::Serialize;
 // use tokio::io::AsyncBufReadExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
 
-pub struct LspClient {
+use super::message_creator::SendMessage;
+
+pub struct Communicator {
     writer: ChildStdin,
     reader: BufReader<ChildStdout>,
 }
 
-impl LspClient {
+impl Communicator {
     pub fn new(writer: ChildStdin, reader: BufReader<ChildStdout>) -> Self {
-        LspClient { writer, reader }
+        Communicator { writer, reader }
     }
 
-    pub async fn send_message<T: Serialize>(
+    pub async fn send_message(
         &mut self,
-        message: &T,
+        message: &SendMessage,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let message = serde_json::to_string(&message)?;
+        let message = match message {
+            SendMessage::Request(request) => serde_json::to_string(request)?,
+            SendMessage::Notification(notification) => serde_json::to_string(notification)?,
+        };
         //println!("Sent: {:#?}", message);
 
         let length = message.as_bytes().len();
