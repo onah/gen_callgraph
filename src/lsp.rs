@@ -57,10 +57,11 @@ impl LspClient {
         let request = self
             .message_factory
             .create_request("initialize", Some(initialize_params));
-        let request = SendMessage::Request(request);
+        let id = request.id;
+        let message = SendMessage::Request(request);
 
-        self.communicator.send_message(&request).await?;
-        self.communicator.receive_message().await?;
+        self.communicator.send_message(&message).await?;
+        self.communicator.receive_response(id).await?;
 
         let initialized_notification = self
             .message_factory

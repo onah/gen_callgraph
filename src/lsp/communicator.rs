@@ -51,6 +51,28 @@ impl Communicator {
         Err("Other Message".into())
     }
 
+    pub async fn receive_response(
+        &mut self,
+        id: i32,
+    ) -> Result<Message, Box<dyn std::error::Error>> {
+        loop {
+            let buffer = self.read_message_buffer().await?;
+            let json: serde_json::Value = serde_json::from_str(&buffer)?;
+
+            if let Some(notification) = self.parse_notification(&json)? {
+                return Ok(Message::Notification(notification));
+            }
+
+            if let Some(message) = self.parse_response(&json)? {
+                if let Message::Response(ref response) = message {
+                    if response.id == id {
+                        return Ok(message);
+                    }
+                }
+            }
+        }
+    }
+
     async fn read_message_buffer(&mut self) -> Result<String, Box<dyn std::error::Error>> {
         let mut header_buffer = Vec::new();
 
