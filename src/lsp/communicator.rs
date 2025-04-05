@@ -24,8 +24,12 @@ impl Communicator {
             SendMessage::Request(request) => serde_json::to_string(request)?,
             SendMessage::Notification(notification) => serde_json::to_string(notification)?,
         };
-        //println!("Sent: {:#?}", message);
 
+        self.send_message2(&message).await?;
+        Ok(())
+    }
+
+    pub async fn send_message2(&mut self, message: &str) -> Result<(), Box<dyn std::error::Error>> {
         let length = message.as_bytes().len();
         let header = format!("Content-Length: {}\r\n\r\n", length);
 

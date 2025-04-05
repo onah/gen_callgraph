@@ -1,5 +1,8 @@
+use lsp_types::{
+    ClientCapabilities, InitializeParams, SymbolKind, SymbolKindCapability,
+    TextDocumentClientCapabilities, WorkspaceClientCapabilities, WorkspaceFolder,
+};
 use serde::{Deserialize, Serialize};
-
 #[derive(Serialize, Deserialize)]
 pub struct Request {
     pub jsonrpc: String,
@@ -39,13 +42,13 @@ pub enum SendMessage {
     Notification(Notification),
 }
 
-pub struct MesssageFuctory {
+pub struct MesssageFactory {
     id: i32,
 }
 
-impl MesssageFuctory {
+impl MesssageFactory {
     pub fn new() -> Self {
-        MesssageFuctory { id: 0 }
+        MesssageFactory { id: 0 }
     }
 
     pub fn get_id(&mut self) -> i32 {
@@ -72,5 +75,53 @@ impl MesssageFuctory {
             method: method.to_string(),
             params: params.map(|p| serde_json::to_value(p).unwrap()),
         }
+    }
+}
+
+pub struct MessageCreator {
+    message_factory: MesssageFactory,
+}
+
+impl MessageCreator {
+    pub fn new() -> MessageCreator {
+        let message_factory = MesssageFactory::new();
+        MessageCreator { message_factory }
+    }
+    pub fn initialize(&mut self) -> Result<Request, Box<dyn std::error::Error>> {
+        let initialize_params = InitializeParams {
+            process_id: Some(std::process::id()),
+            workspace_folders: Some(vec![WorkspaceFolder {
+                uri: lsp_types::Url::parse("file:///c:/Users/PCuser/Work/rust/gen_callgraph")?,
+                name: String::from("gen_callgraph"),
+            }]),
+            capabilities: ClientCapabilities {
+                workspace: Some(WorkspaceClientCapabilities {
+                    symbol: Some(lsp_types::WorkspaceSymbolClientCapabilities {
+                        dynamic_registration: Some(true),
+                        symbol_kind: None,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                text_document: Some(TextDocumentClientCapabilities {
+                    document_symbol: Some(lsp_types::DocumentSymbolClientCapabilities {
+                        dynamic_registration: Some(true),
+                        symbol_kind: Some(SymbolKindCapability {
+                            value_set: Some(vec![SymbolKind::FUNCTION, SymbolKind::STRUCT]),
+                        }),
+                        hierarchical_document_symbol_support: Some(true),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let request = self
+            .message_factory
+            .create_request("initialize", Some(initialize_params));
+
+        Ok(request)
     }
 }

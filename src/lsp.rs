@@ -3,64 +3,30 @@ pub mod message_creator;
 
 use crate::lsp::message_creator::{Message, SendMessage};
 
-use lsp_types::{
-    ClientCapabilities, InitializeParams, SymbolKind, SymbolKindCapability,
-    TextDocumentClientCapabilities, WorkspaceClientCapabilities, WorkspaceFolder,
-};
+use lsp_types::SymbolKind;
 //use std::fs;
 pub struct LspClient {
     communicator: communicator::Communicator,
-    message_factory: message_creator::MesssageFuctory,
+    message_factory: message_creator::MesssageFactory,
+    message_creator: message_creator::MessageCreator,
 }
 
 impl LspClient {
     pub fn new(communicator: communicator::Communicator) -> Self {
-        let message_factory = message_creator::MesssageFuctory::new();
+        let message_factory = message_creator::MesssageFactory::new();
+        let message_creator = message_creator::MessageCreator::new();
         LspClient {
             communicator,
             message_factory,
+            message_creator,
         }
     }
 
     pub async fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let initialize_params = InitializeParams {
-            process_id: Some(std::process::id()),
-            workspace_folders: Some(vec![WorkspaceFolder {
-                uri: lsp_types::Url::parse("file:///c:/Users/PCuser/Work/rust/gen_callgraph")?,
-                name: String::from("gen_callgraph"),
-            }]),
-            capabilities: ClientCapabilities {
-                workspace: Some(WorkspaceClientCapabilities {
-                    symbol: Some(lsp_types::WorkspaceSymbolClientCapabilities {
-                        dynamic_registration: Some(true),
-                        symbol_kind: None,
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }),
-                text_document: Some(TextDocumentClientCapabilities {
-                    document_symbol: Some(lsp_types::DocumentSymbolClientCapabilities {
-                        dynamic_registration: Some(true),
-                        symbol_kind: Some(SymbolKindCapability {
-                            value_set: Some(vec![SymbolKind::FUNCTION, SymbolKind::STRUCT]),
-                        }),
-                        hierarchical_document_symbol_support: Some(true),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let request = self
-            .message_factory
-            .create_request("initialize", Some(initialize_params));
+        let request = self.message_creator.initialize()?;
         let id = request.id;
-        let message = SendMessage::Request(request);
-
-        self.communicator.send_message(&message).await?;
+        let message = serde_json::to_string(&request)?;
+        self.communicator.send_message2(&message).await?;
         self.communicator.receive_response(id).await?;
 
         let initialized_notification = self
@@ -79,9 +45,9 @@ impl LspClient {
         let request = self
             .message_factory
             .create_request("workspace/symbol", Some(serde_json::json!({"query": ""})));
-        let request = SendMessage::Request(request);
 
-        self.communicator.send_message(&request).await?;
+        let message = serde_json::to_string(&request)?;
+        self.communicator.send_message2(&message).await?;
         loop {
             let response = self.communicator.receive_message().await?;
             println!("End get all function list");
