@@ -26,17 +26,14 @@ impl LspClient {
         let request = self.message_creator.initialize()?;
         let id = request.id;
         let message = serde_json::to_string(&request)?;
+
         self.communicator.send_message2(&message).await?;
         self.communicator.receive_response(id).await?;
 
-        let initialized_notification = self
-            .message_factory
-            .create_notification("initialized", Some(""));
-        let initialized_notification = SendMessage::Notification(initialized_notification);
+        let initialized_notification = self.message_creator.initialized_notification()?;
+        let message = serde_json::to_string(&initialized_notification)?;
 
-        self.communicator
-            .send_message(&initialized_notification)
-            .await?;
+        self.communicator.send_message2(&message).await?;
 
         Ok(())
     }

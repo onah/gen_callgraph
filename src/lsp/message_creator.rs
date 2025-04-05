@@ -8,7 +8,7 @@ pub struct Request {
     pub jsonrpc: String,
     pub id: i32,
     pub method: String,
-    pub params: Option<serde_json::Value>,
+    pub params: serde_json::Value,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -29,7 +29,7 @@ pub struct ResponseError {
 pub struct Notification {
     pub jsonrpc: String,
     pub method: String,
-    pub params: Option<serde_json::Value>,
+    pub params: serde_json::Value,
 }
 pub enum Message {
     Response(ResponseMessage),
@@ -56,24 +56,20 @@ impl MesssageFactory {
         self.id
     }
 
-    pub fn create_request<T: Serialize>(&mut self, method: &str, params: Option<T>) -> Request {
+    pub fn create_request<T: Serialize>(&mut self, method: &str, params: T) -> Request {
         Request {
             jsonrpc: "2.0".to_string(),
             id: self.get_id(),
             method: method.to_string(),
-            params: params.map(|p| serde_json::to_value(p).unwrap()),
+            params: serde_json::to_value(params).unwrap(),
         }
     }
 
-    pub fn create_notification<T: Serialize>(
-        &mut self,
-        method: &str,
-        params: Option<T>,
-    ) -> Notification {
+    pub fn create_notification<T: Serialize>(&mut self, method: &str, params: T) -> Notification {
         Notification {
             jsonrpc: "2.0".to_string(),
             method: method.to_string(),
-            params: params.map(|p| serde_json::to_value(p).unwrap()),
+            params: serde_json::to_value(params).unwrap(),
         }
     }
 }
@@ -120,8 +116,13 @@ impl MessageCreator {
         };
         let request = self
             .message_factory
-            .create_request("initialize", Some(initialize_params));
+            .create_request("initialize", initialize_params);
 
         Ok(request)
+    }
+
+    pub fn initialized_notification(&mut self) -> Result<Notification, Box<dyn std::error::Error>> {
+        let notification = self.message_factory.create_notification("initialized", "");
+        Ok(notification)
     }
 }
