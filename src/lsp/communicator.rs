@@ -44,11 +44,11 @@ impl Communicator {
         let buffer = self.read_message_buffer().await?;
         let json: serde_json::Value = serde_json::from_str(&buffer)?;
 
-        if let Some(notification) = self.parse_notification(&json)? {
+        if let Some(notification) = parse_notification(&json)? {
             return Ok(Message::Notification(notification));
         }
 
-        if let Some(response) = self.parse_response(&json)? {
+        if let Some(response) = parse_response(&json)? {
             return Ok(response);
         }
 
@@ -63,11 +63,11 @@ impl Communicator {
             let buffer = self.read_message_buffer().await?;
             let json: serde_json::Value = serde_json::from_str(&buffer)?;
 
-            if let Some(notification) = self.parse_notification(&json)? {
+            if let Some(notification) = parse_notification(&json)? {
                 return Ok(Message::Notification(notification));
             }
 
-            if let Some(message) = self.parse_response(&json)? {
+            if let Some(message) = parse_response(&json)? {
                 if let Message::Response(ref response) = message {
                     if response.id == id {
                         return Ok(message);
@@ -123,31 +123,27 @@ impl Communicator {
             Err("Content-Length header not found".into())
         }
     }
+}
 
-    fn parse_notification(
-        &self,
-        json: &serde_json::Value,
-    ) -> Result<Option<Notification>, Box<dyn std::error::Error>> {
-        if json.get("method").is_some() {
-            let notification: Notification = serde_json::from_value(json.clone())?;
-            return Ok(Some(notification));
-        }
-        Ok(None)
+fn parse_notification(
+    json: &serde_json::Value,
+) -> Result<Option<Notification>, Box<dyn std::error::Error>> {
+    if json.get("method").is_some() {
+        let notification: Notification = serde_json::from_value(json.clone())?;
+        return Ok(Some(notification));
     }
+    Ok(None)
+}
 
-    fn parse_response(
-        &self,
-        json: &serde_json::Value,
-    ) -> Result<Option<Message>, Box<dyn std::error::Error>> {
-        if json.get("id").is_some() {
-            if json.get("result").is_some() {
-                let response: ResponseMessage = serde_json::from_value(json.clone())?;
-                return Ok(Some(Message::Response(response)));
-            } else {
-                let response: ResponseError = serde_json::from_value(json.clone())?;
-                return Ok(Some(Message::Error(response)));
-            }
+fn parse_response(json: &serde_json::Value) -> Result<Option<Message>, Box<dyn std::error::Error>> {
+    if json.get("id").is_some() {
+        if json.get("result").is_some() {
+            let response: ResponseMessage = serde_json::from_value(json.clone())?;
+            return Ok(Some(Message::Response(response)));
+        } else {
+            let response: ResponseError = serde_json::from_value(json.clone())?;
+            return Ok(Some(Message::Error(response)));
         }
-        Ok(None)
     }
+    Ok(None)
 }
