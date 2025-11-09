@@ -20,7 +20,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reader = BufReader::new(child.stdout.take().unwrap());
 
     let communicator = Communicator::new(writer, reader);
-    let lsp_client = lsp::LspClient::new(communicator);
+    // Use the transport-based constructor so higher layers can provide transports.
+    let lsp_client = lsp::LspClient::new_with_transport(Box::new(communicator));
     let mut code_analyzer = CodeAnalyzer::new(lsp_client);
 
     let _result = async {

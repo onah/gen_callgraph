@@ -4,11 +4,13 @@ use crate::lsp::protocol::{parse_notification, parse_response, DynError};
 use crate::lsp::transport::LspTransport;
 use async_trait::async_trait;
 
+#[allow(dead_code)]
 pub struct TransportAdapter {
     transport: Box<dyn LspTransport + Send + Sync>,
 }
 
 impl TransportAdapter {
+    #[allow(dead_code)]
     pub fn new(transport: Box<dyn LspTransport + Send + Sync>) -> Self {
         Self { transport }
     }
