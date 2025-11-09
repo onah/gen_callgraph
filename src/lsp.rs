@@ -11,7 +11,7 @@ use crate::lsp::transport_adapter::TransportAdapter;
 
 use lsp_types::SymbolKind;
 //use std::fs;
-    pub struct LspClient {
+pub struct LspClient {
     communicator: Box<dyn FramedTransport + Send + Sync>,
     message_factory: message_creator::MessageFactory,
     message_creator: message_creator::MessageCreator,

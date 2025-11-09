@@ -19,14 +19,22 @@ impl LspTransport for Communicator {
     async fn send(&mut self, json_body: &str) -> Result<(), DynError> {
         // Communicator's inherent send_message2 returns Box<dyn Error> (not Send+Sync),
         // so wrap its error into DynError here.
-        Communicator::send_message2(self, json_body).await.map_err(|e| {
-            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as DynError
-        })
+        Communicator::send_message2(self, json_body)
+            .await
+            .map_err(|e| {
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    e.to_string(),
+                )) as DynError
+            })
     }
 
     async fn read(&mut self) -> Result<String, DynError> {
         Communicator::read_message_buffer(self).await.map_err(|e| {
-            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as DynError
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e.to_string(),
+            )) as DynError
         })
     }
 }
@@ -64,26 +72,37 @@ impl Communicator {
         let buffer = self.read_message_buffer().await?;
         let json: serde_json::Value = serde_json::from_str(&buffer)?;
 
-        if let Some(notification) = parse_notification(&json).map_err(|e| e as Box<dyn std::error::Error>)? {
+        if let Some(notification) =
+            parse_notification(&json).map_err(|e| e as Box<dyn std::error::Error>)?
+        {
             return Ok(Message::Notification(notification));
         }
 
-        if let Some(response) = parse_response(&json).map_err(|e| e as Box<dyn std::error::Error>)? {
+        if let Some(response) =
+            parse_response(&json).map_err(|e| e as Box<dyn std::error::Error>)?
+        {
             return Ok(response);
         }
 
         Err("Other Message".into())
     }
 
-    pub async fn receive_response(&mut self, id: i32) -> Result<Message, Box<dyn std::error::Error>> {
+    pub async fn receive_response(
+        &mut self,
+        id: i32,
+    ) -> Result<Message, Box<dyn std::error::Error>> {
         loop {
             let buffer = self.read_message_buffer().await?;
             let json: serde_json::Value = serde_json::from_str(&buffer)?;
 
-            if let Some(notification) = parse_notification(&json).map_err(|e| e as Box<dyn std::error::Error>)? {
+            if let Some(notification) =
+                parse_notification(&json).map_err(|e| e as Box<dyn std::error::Error>)?
+            {
                 return Ok(Message::Notification(notification));
             }
-            if let Some(message) = parse_response(&json).map_err(|e| e as Box<dyn std::error::Error>)? {
+            if let Some(message) =
+                parse_response(&json).map_err(|e| e as Box<dyn std::error::Error>)?
+            {
                 if let Message::Response(ref response) = message {
                     if response.id == id {
                         return Ok(message);
@@ -144,26 +163,42 @@ impl Communicator {
 #[async_trait::async_trait]
 impl FramedTransport for Communicator {
     async fn send_message(&mut self, message: &SendMessage) -> Result<(), DynError> {
-        Communicator::send_message(self, message).await.map_err(|e| {
-            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as DynError
-        })
+        Communicator::send_message(self, message)
+            .await
+            .map_err(|e| {
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    e.to_string(),
+                )) as DynError
+            })
     }
 
     async fn send_message2(&mut self, message: &str) -> Result<(), DynError> {
-        Communicator::send_message2(self, message).await.map_err(|e| {
-            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as DynError
-        })
+        Communicator::send_message2(self, message)
+            .await
+            .map_err(|e| {
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    e.to_string(),
+                )) as DynError
+            })
     }
 
     async fn receive_message(&mut self) -> Result<Message, DynError> {
         Communicator::receive_message(self).await.map_err(|e| {
-            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as DynError
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e.to_string(),
+            )) as DynError
         })
     }
 
     async fn receive_response(&mut self, id: i32) -> Result<Message, DynError> {
         Communicator::receive_response(self, id).await.map_err(|e| {
-            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as DynError
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e.to_string(),
+            )) as DynError
         })
     }
 }
