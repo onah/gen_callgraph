@@ -1,6 +1,8 @@
-use crate::lsp::message_creator::{Message, Notification, ResponseError, ResponseMessage};
+use crate::lsp::message_creator::Message;
 //use serde::Serialize;
 // use tokio::io::AsyncBufReadExt;
+use crate::lsp::framed::FramedTransport;
+use crate::lsp::protocol::{parse_notification, parse_response, DynError};
 use crate::lsp::transport::LspTransport;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
@@ -14,24 +16,17 @@ pub struct Communicator {
 
 #[async_trait::async_trait]
 impl LspTransport for Communicator {
-    async fn send(
-        &mut self,
-        json_body: &str,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.send_message2(json_body).await.map_err(|e| {
-            Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            )) as Box<dyn std::error::Error + Send + Sync>
+    async fn send(&mut self, json_body: &str) -> Result<(), DynError> {
+        // Communicator's inherent send_message2 returns Box<dyn Error> (not Send+Sync),
+        // so wrap its error into DynError here.
+        Communicator::send_message2(self, json_body).await.map_err(|e| {
+            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as DynError
         })
     }
 
-    async fn read(&mut self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        self.read_message_buffer().await.map_err(|e| {
-            Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            )) as Box<dyn std::error::Error + Send + Sync>
+    async fn read(&mut self) -> Result<String, DynError> {
+        Communicator::read_message_buffer(self).await.map_err(|e| {
+            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as DynError
         })
     }
 }
@@ -69,30 +64,26 @@ impl Communicator {
         let buffer = self.read_message_buffer().await?;
         let json: serde_json::Value = serde_json::from_str(&buffer)?;
 
-        if let Some(notification) = parse_notification(&json)? {
+        if let Some(notification) = parse_notification(&json).map_err(|e| e as Box<dyn std::error::Error>)? {
             return Ok(Message::Notification(notification));
         }
 
-        if let Some(response) = parse_response(&json)? {
+        if let Some(response) = parse_response(&json).map_err(|e| e as Box<dyn std::error::Error>)? {
             return Ok(response);
         }
 
         Err("Other Message".into())
     }
 
-    pub async fn receive_response(
-        &mut self,
-        id: i32,
-    ) -> Result<Message, Box<dyn std::error::Error>> {
+    pub async fn receive_response(&mut self, id: i32) -> Result<Message, Box<dyn std::error::Error>> {
         loop {
             let buffer = self.read_message_buffer().await?;
             let json: serde_json::Value = serde_json::from_str(&buffer)?;
 
-            if let Some(notification) = parse_notification(&json)? {
+            if let Some(notification) = parse_notification(&json).map_err(|e| e as Box<dyn std::error::Error>)? {
                 return Ok(Message::Notification(notification));
             }
-
-            if let Some(message) = parse_response(&json)? {
+            if let Some(message) = parse_response(&json).map_err(|e| e as Box<dyn std::error::Error>)? {
                 if let Message::Response(ref response) = message {
                     if response.id == id {
                         return Ok(message);
@@ -150,25 +141,29 @@ impl Communicator {
     }
 }
 
-fn parse_notification(
-    json: &serde_json::Value,
-) -> Result<Option<Notification>, Box<dyn std::error::Error>> {
-    if json.get("method").is_some() {
-        let notification: Notification = serde_json::from_value(json.clone())?;
-        return Ok(Some(notification));
+#[async_trait::async_trait]
+impl FramedTransport for Communicator {
+    async fn send_message(&mut self, message: &SendMessage) -> Result<(), DynError> {
+        Communicator::send_message(self, message).await.map_err(|e| {
+            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as DynError
+        })
     }
-    Ok(None)
-}
 
-fn parse_response(json: &serde_json::Value) -> Result<Option<Message>, Box<dyn std::error::Error>> {
-    if json.get("id").is_some() {
-        if json.get("result").is_some() {
-            let response: ResponseMessage = serde_json::from_value(json.clone())?;
-            return Ok(Some(Message::Response(response)));
-        } else {
-            let response: ResponseError = serde_json::from_value(json.clone())?;
-            return Ok(Some(Message::Error(response)));
-        }
+    async fn send_message2(&mut self, message: &str) -> Result<(), DynError> {
+        Communicator::send_message2(self, message).await.map_err(|e| {
+            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as DynError
+        })
     }
-    Ok(None)
+
+    async fn receive_message(&mut self) -> Result<Message, DynError> {
+        Communicator::receive_message(self).await.map_err(|e| {
+            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as DynError
+        })
+    }
+
+    async fn receive_response(&mut self, id: i32) -> Result<Message, DynError> {
+        Communicator::receive_response(self, id).await.map_err(|e| {
+            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as DynError
+        })
+    }
 }

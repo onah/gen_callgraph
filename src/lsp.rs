@@ -1,13 +1,18 @@
 pub mod communicator;
+pub mod framed;
 pub mod message_creator;
+pub mod protocol;
 pub mod transport;
+pub mod transport_adapter;
 
+use crate::lsp::framed::FramedTransport;
 use crate::lsp::message_creator::{Message, SendMessage};
+use crate::lsp::transport_adapter::TransportAdapter;
 
 use lsp_types::SymbolKind;
 //use std::fs;
-pub struct LspClient {
-    communicator: communicator::Communicator,
+    pub struct LspClient {
+    communicator: Box<dyn FramedTransport + Send + Sync>,
     message_factory: message_creator::MessageFactory,
     message_creator: message_creator::MessageCreator,
 }
@@ -17,7 +22,20 @@ impl LspClient {
         let message_factory = message_creator::MessageFactory::new();
         let message_creator = message_creator::MessageCreator::new();
         LspClient {
-            communicator,
+            communicator: Box::new(communicator),
+            message_factory,
+            message_creator,
+        }
+    }
+
+    pub fn new_with_transport(
+        transport: Box<dyn crate::lsp::transport::LspTransport + Send + Sync>,
+    ) -> Self {
+        let message_factory = message_creator::MessageFactory::new();
+        let message_creator = message_creator::MessageCreator::new();
+        let adapter = TransportAdapter::new(transport);
+        LspClient {
+            communicator: Box::new(adapter),
             message_factory,
             message_creator,
         }
@@ -28,13 +46,22 @@ impl LspClient {
         let id = request.id;
         let message = serde_json::to_string(&request)?;
 
-        self.communicator.send_message2(&message).await?;
-        self.communicator.receive_response(id).await?;
+        self.communicator
+            .send_message2(&message)
+            .await
+            .map_err(|e| e as Box<dyn std::error::Error>)?;
+        self.communicator
+            .receive_response(id)
+            .await
+            .map_err(|e| e as Box<dyn std::error::Error>)?;
 
         let initialized_notification = self.message_creator.initialized_notification()?;
         let message = serde_json::to_string(&initialized_notification)?;
 
-        self.communicator.send_message2(&message).await?;
+        self.communicator
+            .send_message2(&message)
+            .await
+            .map_err(|e| e as Box<dyn std::error::Error>)?;
 
         Ok(())
     }
@@ -45,9 +72,16 @@ impl LspClient {
             .create_request("workspace/symbol", Some(serde_json::json!({"query": ""})));
 
         let message = serde_json::to_string(&request)?;
-        self.communicator.send_message2(&message).await?;
+        self.communicator
+            .send_message2(&message)
+            .await
+            .map_err(|e| e as Box<dyn std::error::Error>)?;
         loop {
-            let response = self.communicator.receive_message().await?;
+            let response = self
+                .communicator
+                .receive_message()
+                .await
+                .map_err(|e| e as Box<dyn std::error::Error>)?;
             //println!("End get all function list");
 
             match response {
@@ -83,12 +117,22 @@ impl LspClient {
         let request = self.message_factory.create_request("shutdown", Some(""));
         let request = SendMessage::Request(request);
 
-        self.communicator.send_message(&request).await?;
-        let _response = self.communicator.receive_message().await?;
+        self.communicator
+            .send_message(&request)
+            .await
+            .map_err(|e| e as Box<dyn std::error::Error>)?;
+        let _response = self
+            .communicator
+            .receive_message()
+            .await
+            .map_err(|e| e as Box<dyn std::error::Error>)?;
 
         let notification = self.message_factory.create_notification("exit", Some(""));
         let notification = SendMessage::Notification(notification);
-        self.communicator.send_message(&notification).await?;
+        self.communicator
+            .send_message(&notification)
+            .await
+            .map_err(|e| e as Box<dyn std::error::Error>)?;
 
         Ok(())
     }
