@@ -47,11 +47,11 @@ impl LspClient {
         self.communicator.send_message2(&message).await?;
         loop {
             let response = self.communicator.receive_message().await?;
-            println!("End get all function list");
+            //println!("End get all function list");
 
             match response {
                 Message::Response(response) => {
-                    println!("ResponseMessage: {:#?}", response);
+                    //println!("ResponseMessage: {:#?}", response);
 
                     let symbols: Vec<lsp_types::SymbolInformation> =
                         serde_json::from_value(response.result.unwrap()).unwrap();
@@ -65,12 +65,12 @@ impl LspClient {
                     }
                     break;
                 }
-                Message::Error(response) => {
-                    println!("Error: {:#?}", response.error.unwrap());
+                Message::Error(_response) => {
+                    //println!("Error: {:#?}", response.error.unwrap());
                     break;
                 }
-                Message::Notification(notification) => {
-                    println!("Notification {:#?}", notification);
+                Message::Notification(_notification) => {
+                    //println!("Notification {:#?}", notification);
                 }
             }
         }
@@ -91,4 +91,19 @@ impl LspClient {
 
         Ok(())
     }
+    /*
+    pub async fn did_open_notification(
+        &mut self,
+        file_path: &str,
+        file_contents: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let notification = self
+            .message_creator
+            .did_open_notification(file_path, file_contents)?;
+        let message = serde_json::to_string(&notification)?;
+        self.communicator.send_message2(&message).await?;
+
+        Ok(())
+    }
+    */
 }

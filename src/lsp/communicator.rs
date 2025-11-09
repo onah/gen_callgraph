@@ -94,11 +94,11 @@ impl Communicator {
 
         // ヘッダーを文字列に変換
         let header_str = String::from_utf8(header_buffer)?;
-        println!("Header: {}", header_str);
+        //println!("Header: {}", header_str);
 
         // Content-Lengthを取得
         let content_length = self.get_content_length(&header_str)?;
-        println!("Parsed Content-Length: {}", content_length);
+        //println!("Parsed Content-Length: {}", content_length);
 
         // ペイロード部分を読み取る
         let mut payload_buffer = vec![0; content_length];

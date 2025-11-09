@@ -25,6 +25,15 @@ impl CodeAnalyzer {
     }
 
     /*
+        pub async fn collect_outgoing_calls(
+            &mut self,
+            file_path: &str,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            Ok(())
+        }
+    */
+
+    /*
 
     pub async fn _get_main_function_location(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // send textDocumetn/didOpen notification

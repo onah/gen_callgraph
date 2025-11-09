@@ -125,4 +125,25 @@ impl MessageCreator {
         let notification = self.message_factory.create_notification("initialized", "");
         Ok(notification)
     }
+
+    /*
+    pub fn did_open_notification(
+        &mut self,
+        file_path: &str,
+        file_contents: &str,
+    ) -> Result<Notification, Box<dyn std::error::Error>> {
+        let notification = self.message_factory.create_notification(
+            "textDocument/didOpen",
+            serde_json::json!({
+                "textDocument": {
+                    "uri": format!("file://{}", file_path),
+                    "languageId": "rust",
+                    "version": 1,
+                    "text": file_contents
+                }
+            }),
+        );
+        Ok(notification)
+    }
+    */
 }

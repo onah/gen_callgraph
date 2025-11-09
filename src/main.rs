@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         thread::sleep(time::Duration::from_secs(10));
 
-        println!("start ger all function list");
+        //println!("start ger all function list");
         match code_analyzer.get_all_function_list().await {
             Ok(_) => println!("Function list Success"),
             Err(e) => eprintln!("Function list Error: {:?}", e),
