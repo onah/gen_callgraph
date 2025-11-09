@@ -25,7 +25,9 @@ impl LspTransport for Communicator {
     }
 
     async fn read(&mut self) -> Result<String, DynError> {
-        Communicator::read_message_buffer(self).await.map_err(|e| Box::new(std::io::Error::other(e.to_string())) as DynError)
+        Communicator::read_message_buffer(self)
+            .await
+            .map_err(|e| Box::new(std::io::Error::other(e.to_string())) as DynError)
     }
 }
 
@@ -165,10 +167,14 @@ impl FramedTransport for Communicator {
     }
 
     async fn receive_message(&mut self) -> Result<Message, DynError> {
-        Communicator::receive_message(self).await.map_err(|e| Box::new(std::io::Error::other(e.to_string())) as DynError)
+        Communicator::receive_message(self)
+            .await
+            .map_err(|e| Box::new(std::io::Error::other(e.to_string())) as DynError)
     }
 
     async fn receive_response(&mut self, id: i32) -> Result<Message, DynError> {
-        Communicator::receive_response(self, id).await.map_err(|e| Box::new(std::io::Error::other(e.to_string())) as DynError)
+        Communicator::receive_response(self, id)
+            .await
+            .map_err(|e| Box::new(std::io::Error::other(e.to_string())) as DynError)
     }
 }

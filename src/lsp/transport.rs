@@ -31,11 +31,7 @@ mod tests {
     #[async_trait]
     impl LspTransport for InMemoryTransport {
         async fn send(&mut self, json_body: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
-            let framed = format!(
-                "Content-Length: {}\r\n\r\n{}",
-                json_body.len(),
-                json_body
-            );
+            let framed = format!("Content-Length: {}\r\n\r\n{}", json_body.len(), json_body);
             self.stream.write_all(framed.as_bytes()).await?;
             self.stream.flush().await?;
             Ok(())

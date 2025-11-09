@@ -4,7 +4,6 @@ pub mod framed_wrapper;
 pub mod message_creator;
 pub mod protocol;
 pub mod transport;
-pub mod transport_adapter;
 
 use crate::lsp::framed::FramedTransport;
 use crate::lsp::message_creator::{Message, SendMessage};
@@ -18,21 +17,7 @@ pub struct LspClient {
 }
 
 impl LspClient {
-    #[allow(dead_code)]
-    // keep old constructor for backwards compatibility; prefer new_with_transport
-    pub fn new(communicator: communicator::Communicator) -> Self {
-        let message_factory = message_creator::MessageFactory::new();
-        let message_creator = message_creator::MessageCreator::new();
-        LspClient {
-            communicator: Box::new(communicator),
-            message_factory,
-            message_creator,
-        }
-    }
-
-    pub fn new_with_transport(
-        transport: Box<dyn crate::lsp::transport::LspTransport + Send + Sync>,
-    ) -> Self {
+    pub fn new(transport: Box<dyn crate::lsp::transport::LspTransport + Send + Sync>) -> Self {
         let message_factory = message_creator::MessageFactory::new();
         let message_creator = message_creator::MessageCreator::new();
         let framed = crate::lsp::framed_wrapper::FramedBox::new(transport);

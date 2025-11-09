@@ -21,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let communicator = Communicator::new(writer, reader);
     // Use the transport-based constructor so higher layers can provide transports.
-    let lsp_client = lsp::LspClient::new_with_transport(Box::new(communicator));
+    let lsp_client = lsp::LspClient::new(Box::new(communicator));
     let mut code_analyzer = CodeAnalyzer::new(lsp_client);
 
     let _result = async {

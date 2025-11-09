@@ -4,26 +4,6 @@ use crate::lsp::protocol::{parse_notification, parse_response, DynError};
 use crate::lsp::transport::LspTransport;
 use async_trait::async_trait;
 
-// Keep the generic Framed<T> implementation available for future use, but allow
-// dead_code to avoid warnings while the codebase uses boxed transports.
-#[allow(dead_code)]
-pub struct Framed<T>
-where
-    T: LspTransport + Send + Sync,
-{
-    inner: T,
-}
-
-#[allow(dead_code)]
-impl<T> Framed<T>
-where
-    T: LspTransport + Send + Sync,
-{
-    pub fn new(inner: T) -> Self {
-        Framed { inner }
-    }
-}
-
 // Convenience impl for boxed transports (trait objects)
 // FramedBox: convenience wrapper for boxed trait objects
 pub struct FramedBox {
