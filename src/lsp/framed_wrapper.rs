@@ -62,10 +62,7 @@ impl FramedTransport for FramedBox {
             return Ok(response);
         }
 
-        Err(Box::new(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Other Message",
-        )))
+        Err(Box::new(std::io::Error::other("Other Message")))
     }
 
     async fn receive_response(&mut self, id: i32) -> Result<Message, DynError> {

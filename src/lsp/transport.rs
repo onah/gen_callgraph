@@ -33,7 +33,7 @@ mod tests {
         async fn send(&mut self, json_body: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
             let framed = format!(
                 "Content-Length: {}\r\n\r\n{}",
-                json_body.as_bytes().len(),
+                json_body.len(),
                 json_body
             );
             self.stream.write_all(framed.as_bytes()).await?;
@@ -79,7 +79,7 @@ mod tests {
         // spawn a task that writes a framed message into peer `b`
         let handle = tokio::spawn(async move {
             let json = r#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#;
-            let framed = format!("Content-Length: {}\r\n\r\n{}", json.as_bytes().len(), json);
+            let framed = format!("Content-Length: {}\r\n\r\n{}", json.len(), json);
             b.write_all(framed.as_bytes()).await.unwrap();
             b.flush().await.unwrap();
         });
