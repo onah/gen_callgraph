@@ -42,13 +42,13 @@ pub enum SendMessage {
     Notification(Notification),
 }
 
-pub struct MesssageFactory {
+pub struct MessageFactory {
     id: i32,
 }
 
-impl MesssageFactory {
+impl MessageFactory {
     pub fn new() -> Self {
-        MesssageFactory { id: 0 }
+        MessageFactory { id: 0 }
     }
 
     pub fn get_id(&mut self) -> i32 {
@@ -75,12 +75,12 @@ impl MesssageFactory {
 }
 
 pub struct MessageCreator {
-    message_factory: MesssageFactory,
+    message_factory: MessageFactory,
 }
 
 impl MessageCreator {
     pub fn new() -> MessageCreator {
-        let message_factory = MesssageFactory::new();
+        let message_factory = MessageFactory::new();
         MessageCreator { message_factory }
     }
     pub fn initialize(&mut self) -> Result<Request, Box<dyn std::error::Error>> {

@@ -1,6 +1,7 @@
 use crate::lsp::message_creator::{Message, Notification, ResponseError, ResponseMessage};
 //use serde::Serialize;
 // use tokio::io::AsyncBufReadExt;
+use crate::lsp::transport::LspTransport;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
 
@@ -9,6 +10,30 @@ use super::message_creator::SendMessage;
 pub struct Communicator {
     writer: ChildStdin,
     reader: BufReader<ChildStdout>,
+}
+
+#[async_trait::async_trait]
+impl LspTransport for Communicator {
+    async fn send(
+        &mut self,
+        json_body: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.send_message2(json_body).await.map_err(|e| {
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e.to_string(),
+            )) as Box<dyn std::error::Error + Send + Sync>
+        })
+    }
+
+    async fn read(&mut self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        self.read_message_buffer().await.map_err(|e| {
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e.to_string(),
+            )) as Box<dyn std::error::Error + Send + Sync>
+        })
+    }
 }
 
 impl Communicator {

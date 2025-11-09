@@ -1,5 +1,6 @@
 pub mod communicator;
 pub mod message_creator;
+pub mod transport;
 
 use crate::lsp::message_creator::{Message, SendMessage};
 
@@ -7,13 +8,13 @@ use lsp_types::SymbolKind;
 //use std::fs;
 pub struct LspClient {
     communicator: communicator::Communicator,
-    message_factory: message_creator::MesssageFactory,
+    message_factory: message_creator::MessageFactory,
     message_creator: message_creator::MessageCreator,
 }
 
 impl LspClient {
     pub fn new(communicator: communicator::Communicator) -> Self {
-        let message_factory = message_creator::MesssageFactory::new();
+        let message_factory = message_creator::MessageFactory::new();
         let message_creator = message_creator::MessageCreator::new();
         LspClient {
             communicator,
