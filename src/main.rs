@@ -2,26 +2,19 @@ mod code_analysis;
 mod lsp;
 
 use code_analysis::CodeAnalyzer;
-use lsp::communicator::Communicator;
+use lsp::stdio_transport::StdioTransport;
+use lsp::transport;
 use std::{thread, time};
-use tokio::io::BufReader;
-use tokio::process::Command;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut child = Command::new("rust-analyzer")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit())
-        .spawn()
+    let (_child, writer, reader) = transport::start_rust_analyzer("rust-analyzer", &[])
+        .await
         .expect("Failed to start rust-analyzer");
 
-    let writer = child.stdin.take().unwrap();
-    let reader = BufReader::new(child.stdout.take().unwrap());
-
-    let communicator = Communicator::new(writer, reader);
+    let stdio = StdioTransport::new(writer, reader);
     // Use the transport-based constructor so higher layers can provide transports.
-    let lsp_client = lsp::LspClient::new(Box::new(communicator));
+    let lsp_client = lsp::LspClient::new(Box::new(stdio));
     let mut code_analyzer = CodeAnalyzer::new(lsp_client);
 
     let _result = async {

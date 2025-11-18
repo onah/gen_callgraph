@@ -1,8 +1,8 @@
-pub mod communicator;
 pub mod framed;
 pub mod framed_wrapper;
 pub mod message_creator;
 pub mod protocol;
+pub mod stdio_transport;
 pub mod transport;
 
 use crate::lsp::framed::FramedTransport;
