@@ -23,3 +23,15 @@ pub fn parse_response(json: &serde_json::Value) -> Result<Option<Message>, DynEr
     }
     Ok(None)
 }
+
+/// Parse a full JSON string (payload) into a `Message` (Notification/Response/Error).
+pub fn parse_message_from_str(s: &str) -> Result<Message, DynError> {
+    let json: serde_json::Value = serde_json::from_str(s)?;
+    if let Some(notification) = parse_notification(&json)? {
+        return Ok(Message::Notification(notification));
+    }
+    if let Some(response) = parse_response(&json)? {
+        return Ok(response);
+    }
+    Err("Other Message".into())
+}

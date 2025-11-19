@@ -1,6 +1,6 @@
 use crate::lsp::framed::FramedTransport;
 use crate::lsp::message_creator::{Message, SendMessage};
-use crate::lsp::protocol::{parse_notification, parse_response, DynError};
+use crate::lsp::protocol::{parse_message_from_str, DynError};
 use crate::lsp::transport::LspTransport;
 use async_trait::async_trait;
 
@@ -32,34 +32,20 @@ impl FramedTransport for FramedBox {
 
     async fn receive_message(&mut self) -> Result<Message, DynError> {
         let buffer = self.inner.read().await?;
-        let json: serde_json::Value = serde_json::from_str(&buffer)?;
-
-        if let Some(notification) = parse_notification(&json)? {
-            return Ok(Message::Notification(notification));
-        }
-
-        if let Some(response) = parse_response(&json)? {
-            return Ok(response);
-        }
-
-        Err(Box::new(std::io::Error::other("Other Message")))
+        let msg = parse_message_from_str(&buffer)?;
+        Ok(msg)
     }
 
     async fn receive_response(&mut self, id: i32) -> Result<Message, DynError> {
         loop {
             let buffer = self.inner.read().await?;
-            let json: serde_json::Value = serde_json::from_str(&buffer)?;
-
-            if let Some(notification) = parse_notification(&json)? {
-                return Ok(Message::Notification(notification));
-            }
-
-            if let Some(message) = parse_response(&json)? {
-                if let Message::Response(ref response) = message {
-                    if response.id == id {
-                        return Ok(message);
-                    }
+            let message = parse_message_from_str(&buffer)?;
+            if let Message::Response(ref response) = message {
+                if response.id == id {
+                    return Ok(message);
                 }
+            } else if let Message::Notification(_) = message {
+                return Ok(message);
             }
         }
     }

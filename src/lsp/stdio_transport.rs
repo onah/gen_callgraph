@@ -1,13 +1,8 @@
-use crate::lsp::message_creator::Message;
-//use serde::Serialize;
-// use tokio::io::AsyncBufReadExt;
-use crate::lsp::framed::FramedTransport;
-use crate::lsp::protocol::{parse_notification, parse_response, DynError};
+// low-level stdio transport: framing (Content-Length) and raw read/write
+use crate::lsp::protocol::DynError;
 use crate::lsp::transport::LspTransport;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
-
-use super::message_creator::SendMessage;
 
 pub struct StdioTransport {
     writer: ChildStdin,
@@ -17,11 +12,22 @@ pub struct StdioTransport {
 #[async_trait::async_trait]
 impl LspTransport for StdioTransport {
     async fn send(&mut self, json_body: &str) -> Result<(), DynError> {
-        // StdioTransport's inherent send_message2 returns Box<dyn Error> (not Send+Sync),
-        // so wrap its error into DynError here.
-        StdioTransport::send_message2(self, json_body)
+        let length = json_body.len();
+        let header = format!("Content-Length: {}\r\n\r\n", length);
+
+        self.writer
+            .write_all(header.as_bytes())
             .await
-            .map_err(|e| Box::new(std::io::Error::other(e.to_string())) as DynError)
+            .map_err(|e| Box::new(e) as DynError)?;
+        self.writer
+            .write_all(json_body.as_bytes())
+            .await
+            .map_err(|e| Box::new(e) as DynError)?;
+        self.writer
+            .flush()
+            .await
+            .map_err(|e| Box::new(e) as DynError)?;
+        Ok(())
     }
 
     async fn read(&mut self) -> Result<String, DynError> {
@@ -36,73 +42,9 @@ impl StdioTransport {
         StdioTransport { writer, reader }
     }
 
-    pub async fn send_message(
-        &mut self,
-        message: &SendMessage,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let message = match message {
-            SendMessage::Request(request) => serde_json::to_string(request)?,
-            SendMessage::Notification(notification) => serde_json::to_string(notification)?,
-        };
-
-        self.send_message2(&message).await?;
-        Ok(())
-    }
-
-    pub async fn send_message2(&mut self, message: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let length = message.len();
-        let header = format!("Content-Length: {}\r\n\r\n", length);
-
-        self.writer.write_all(header.as_bytes()).await?;
-        self.writer.write_all(message.as_bytes()).await?;
-        self.writer.flush().await?;
-
-        Ok(())
-    }
-
-    pub async fn receive_message(&mut self) -> Result<Message, Box<dyn std::error::Error>> {
-        let buffer = self.read_message_buffer().await?;
-        let json: serde_json::Value = serde_json::from_str(&buffer)?;
-
-        if let Some(notification) =
-            parse_notification(&json).map_err(|e| e as Box<dyn std::error::Error>)?
-        {
-            return Ok(Message::Notification(notification));
-        }
-
-        if let Some(response) =
-            parse_response(&json).map_err(|e| e as Box<dyn std::error::Error>)?
-        {
-            return Ok(response);
-        }
-
-        Err("Other Message".into())
-    }
-
-    pub async fn receive_response(
-        &mut self,
-        id: i32,
-    ) -> Result<Message, Box<dyn std::error::Error>> {
-        loop {
-            let buffer = self.read_message_buffer().await?;
-            let json: serde_json::Value = serde_json::from_str(&buffer)?;
-
-            if let Some(notification) =
-                parse_notification(&json).map_err(|e| e as Box<dyn std::error::Error>)?
-            {
-                return Ok(Message::Notification(notification));
-            }
-            if let Some(message) =
-                parse_response(&json).map_err(|e| e as Box<dyn std::error::Error>)?
-            {
-                if let Message::Response(ref response) = message {
-                    if response.id == id {
-                        return Ok(message);
-                    }
-                }
-            }
-        }
-    }
+    // High-level message send/receive methods belong to the framed layer.
+    // StdioTransport keeps low-level framing (read_message_buffer/get_content_length)
+    // and implements `LspTransport` (send/read) which operate on raw JSON strings.
 
     async fn read_message_buffer(&mut self) -> Result<String, Box<dyn std::error::Error>> {
         let mut header_buffer = Vec::new();
@@ -152,29 +94,5 @@ impl StdioTransport {
     }
 }
 
-#[async_trait::async_trait]
-impl FramedTransport for StdioTransport {
-    async fn send_message(&mut self, message: &SendMessage) -> Result<(), DynError> {
-        StdioTransport::send_message(self, message)
-            .await
-            .map_err(|e| Box::new(std::io::Error::other(e.to_string())) as DynError)
-    }
-
-    async fn send_message2(&mut self, message: &str) -> Result<(), DynError> {
-        StdioTransport::send_message2(self, message)
-            .await
-            .map_err(|e| Box::new(std::io::Error::other(e.to_string())) as DynError)
-    }
-
-    async fn receive_message(&mut self) -> Result<Message, DynError> {
-        StdioTransport::receive_message(self)
-            .await
-            .map_err(|e| Box::new(std::io::Error::other(e.to_string())) as DynError)
-    }
-
-    async fn receive_response(&mut self, id: i32) -> Result<Message, DynError> {
-        StdioTransport::receive_response(self, id)
-            .await
-            .map_err(|e| Box::new(std::io::Error::other(e.to_string())) as DynError)
-    }
-}
+// Note: FramedTransport implementations are provided by `framed_wrapper.rs` (FramedBox),
+// which wraps a `Box<dyn LspTransport>` and provides message-level APIs.
