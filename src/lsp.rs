@@ -12,24 +12,21 @@ use lsp_types::SymbolKind;
 //use std::fs;
 pub struct LspClient {
     communicator: Box<dyn FramedTransport + Send + Sync>,
-    message_factory: message_creator::MessageFactory,
-    message_creator: message_creator::MessageCreator,
+    message_builder: message_creator::MessageBuilder,
 }
 
 impl LspClient {
     pub fn new(transport: Box<dyn crate::lsp::transport::LspTransport + Send + Sync>) -> Self {
-        let message_factory = message_creator::MessageFactory::new();
-        let message_creator = message_creator::MessageCreator::new();
+        let message_builder = message_creator::MessageBuilder::new();
         let framed = crate::lsp::framed_wrapper::FramedBox::new(transport);
         LspClient {
             communicator: Box::new(framed),
-            message_factory,
-            message_creator,
+            message_builder: message_builder,
         }
     }
 
     pub async fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let request = self.message_creator.initialize()?;
+        let request = self.message_builder.initialize()?;
         let id = request.id;
         let message = serde_json::to_string(&request)?;
 
@@ -42,7 +39,7 @@ impl LspClient {
             .await
             .map_err(|e| e as Box<dyn std::error::Error>)?;
 
-        let initialized_notification = self.message_creator.initialized_notification()?;
+        let initialized_notification = self.message_builder.initialized_notification()?;
         let message = serde_json::to_string(&initialized_notification)?;
 
         self.communicator
@@ -55,7 +52,7 @@ impl LspClient {
 
     pub async fn get_all_function_list(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let request = self
-            .message_factory
+            .message_builder
             .create_request("workspace/symbol", Some(serde_json::json!({"query": ""})));
 
         let message = serde_json::to_string(&request)?;
@@ -101,7 +98,7 @@ impl LspClient {
     }
 
     pub async fn shutdown(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let request = self.message_factory.create_request("shutdown", Some(""));
+        let request = self.message_builder.create_request("shutdown", Some(""));
         let request = SendMessage::Request(request);
 
         self.communicator
@@ -114,7 +111,7 @@ impl LspClient {
             .await
             .map_err(|e| e as Box<dyn std::error::Error>)?;
 
-        let notification = self.message_factory.create_notification("exit", Some(""));
+        let notification = self.message_builder.create_notification("exit", Some(""));
         let notification = SendMessage::Notification(notification);
         self.communicator
             .send_message(&notification)

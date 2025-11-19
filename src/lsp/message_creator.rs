@@ -42,13 +42,13 @@ pub enum SendMessage {
     Notification(Notification),
 }
 
-pub struct MessageFactory {
+pub struct RequestIdGenerator {
     id: i32,
 }
 
-impl MessageFactory {
+impl RequestIdGenerator {
     pub fn new() -> Self {
-        MessageFactory { id: 0 }
+        RequestIdGenerator { id: 0 }
     }
 
     pub fn get_id(&mut self) -> i32 {
@@ -74,14 +74,21 @@ impl MessageFactory {
     }
 }
 
-pub struct MessageCreator {
-    message_factory: MessageFactory,
+pub struct MessageBuilder {
+    message_factory: RequestIdGenerator,
 }
 
-impl MessageCreator {
-    pub fn new() -> MessageCreator {
-        let message_factory = MessageFactory::new();
-        MessageCreator { message_factory }
+impl MessageBuilder {
+    pub fn new() -> MessageBuilder {
+        let message_factory = RequestIdGenerator::new();
+        MessageBuilder { message_factory }
+    }
+    pub fn create_request<T: Serialize>(&mut self, method: &str, params: T) -> Request {
+        self.message_factory.create_request(method, params)
+    }
+
+    pub fn create_notification<T: Serialize>(&mut self, method: &str, params: T) -> Notification {
+        self.message_factory.create_notification(method, params)
     }
     pub fn initialize(&mut self) -> Result<Request, Box<dyn std::error::Error>> {
         let initialize_params = InitializeParams {
