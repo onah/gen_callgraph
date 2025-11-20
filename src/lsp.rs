@@ -4,9 +4,13 @@ pub mod message_creator;
 pub mod protocol;
 pub mod stdio_transport;
 pub mod transport;
+pub mod types;
+
+/// Common boxed error type for LSP module boundaries.
+pub type DynError = Box<dyn std::error::Error + Send + Sync>;
 
 use crate::lsp::framed::FramedTransport;
-use crate::lsp::message_creator::{Message, SendMessage};
+use crate::lsp::types::{Message, SendMessage};
 
 use lsp_types::SymbolKind;
 //use std::fs;
@@ -53,7 +57,7 @@ impl LspClient {
     pub async fn get_all_function_list(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let request = self
             .message_builder
-            .create_request("workspace/symbol", Some(serde_json::json!({"query": ""})));
+            .create_request("workspace/symbol", Some(serde_json::json!({"query": ""})))?;
 
         let message = serde_json::to_string(&request)?;
         self.communicator
@@ -98,7 +102,7 @@ impl LspClient {
     }
 
     pub async fn shutdown(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let request = self.message_builder.create_request("shutdown", Some(""));
+        let request = self.message_builder.create_request("shutdown", Some(""))?;
         let request = SendMessage::Request(request);
 
         self.communicator
@@ -111,7 +115,7 @@ impl LspClient {
             .await
             .map_err(|e| e as Box<dyn std::error::Error>)?;
 
-        let notification = self.message_builder.create_notification("exit", Some(""));
+        let notification = self.message_builder.create_notification("exit", Some(""))?;
         let notification = SendMessage::Notification(notification);
         self.communicator
             .send_message(&notification)

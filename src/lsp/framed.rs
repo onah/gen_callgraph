@@ -1,5 +1,5 @@
-use crate::lsp::message_creator::{Message, SendMessage};
-use crate::lsp::protocol::DynError;
+use crate::lsp::types::{Message, SendMessage};
+use crate::lsp::DynError;
 use async_trait::async_trait;
 
 #[async_trait]

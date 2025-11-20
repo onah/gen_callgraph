@@ -1,7 +1,5 @@
-use crate::lsp::message_creator::{Message, Notification, ResponseError, ResponseMessage};
-
-/// Common boxed error type for async boundaries in this crate.
-pub type DynError = Box<dyn std::error::Error + Send + Sync>;
+use crate::lsp::types::{Message, Notification, ResponseError, ResponseMessage};
+use crate::lsp::DynError;
 
 pub fn parse_notification(json: &serde_json::Value) -> Result<Option<Notification>, DynError> {
     if json.get("method").is_some() {

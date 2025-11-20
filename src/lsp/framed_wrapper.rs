@@ -1,6 +1,7 @@
 use crate::lsp::framed::FramedTransport;
-use crate::lsp::message_creator::{Message, SendMessage};
-use crate::lsp::protocol::{parse_message_from_str, DynError};
+use crate::lsp::types::{Message, SendMessage};
+use crate::lsp::protocol::parse_message_from_str;
+use crate::lsp::DynError;
 use crate::lsp::transport::LspTransport;
 use async_trait::async_trait;
 

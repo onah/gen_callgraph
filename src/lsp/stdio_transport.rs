@@ -1,6 +1,6 @@
 // low-level stdio transport: framing (Content-Length) and raw read/write
-use crate::lsp::protocol::DynError;
 use crate::lsp::transport::LspTransport;
+use crate::lsp::DynError;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
 
