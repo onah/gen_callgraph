@@ -1,7 +1,7 @@
 pub mod framed;
 pub mod framed_wrapper;
 pub mod message_creator;
-pub mod protocol;
+pub mod message_parser;
 pub mod stdio_transport;
 pub mod transport;
 pub mod types;
