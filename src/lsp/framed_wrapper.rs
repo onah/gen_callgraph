@@ -1,8 +1,8 @@
 use crate::lsp::framed::FramedTransport;
-use crate::lsp::types::{Message, SendMessage};
 use crate::lsp::message_parser::parse_message_from_str;
-use crate::lsp::DynError;
 use crate::lsp::transport::LspTransport;
+use crate::lsp::types::{Message, SendMessage};
+use crate::lsp::DynError;
 use async_trait::async_trait;
 
 // Convenience impl for boxed transports (trait objects)
