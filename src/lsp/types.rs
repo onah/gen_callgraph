@@ -55,8 +55,3 @@ pub enum Message {
     Error(ResponseError),
     Notification(Notification),
 }
-
-pub enum SendMessage {
-    Request(Request),
-    Notification(Notification),
-}

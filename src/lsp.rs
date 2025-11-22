@@ -10,10 +10,10 @@ pub mod types;
 pub type DynError = Box<dyn std::error::Error + Send + Sync>;
 
 use crate::lsp::framed::FramedTransport;
-use crate::lsp::types::{Message, SendMessage};
-
+use crate::lsp::types::Message;
 use lsp_types::SymbolKind;
-//use std::fs;
+use std::time::Duration;
+
 pub struct LspClient {
     communicator: Box<dyn FramedTransport + Send + Sync>,
     message_builder: message_creator::MessageBuilder,
@@ -25,29 +25,28 @@ impl LspClient {
         let framed = crate::lsp::framed_wrapper::FramedBox::new(transport);
         LspClient {
             communicator: Box::new(framed),
-            message_builder: message_builder,
+            message_builder,
         }
     }
 
     pub async fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let request = self.message_builder.initialize()?;
-        let id = request.id;
-        let message = serde_json::to_string(&request)?;
-
-        self.communicator
-            .send_message2(&message)
+        // send request via framed transport and wait for response
+        let id = self
+            .communicator
+            .send_request(request)
             .await
             .map_err(|e| e as Box<dyn std::error::Error>)?;
-        self.communicator
-            .receive_response(id)
+        let _resp = self
+            .communicator
+            .receive_response_with_timeout(id, Some(Duration::from_secs(10)))
             .await
             .map_err(|e| e as Box<dyn std::error::Error>)?;
 
         let initialized_notification = self.message_builder.initialized_notification()?;
-        let message = serde_json::to_string(&initialized_notification)?;
-
+        // send initialized notification
         self.communicator
-            .send_message2(&message)
+            .send_notification(initialized_notification)
             .await
             .map_err(|e| e as Box<dyn std::error::Error>)?;
 
@@ -59,42 +58,37 @@ impl LspClient {
             .message_builder
             .create_request("workspace/symbol", Some(serde_json::json!({"query": ""})))?;
 
-        let message = serde_json::to_string(&request)?;
-        self.communicator
-            .send_message2(&message)
+        // send request and wait for response
+        let id = self
+            .communicator
+            .send_request(request)
             .await
             .map_err(|e| e as Box<dyn std::error::Error>)?;
-        loop {
-            let response = self
-                .communicator
-                .receive_message()
-                .await
-                .map_err(|e| e as Box<dyn std::error::Error>)?;
-            //println!("End get all function list");
 
-            match response {
-                Message::Response(response) => {
-                    //println!("ResponseMessage: {:#?}", response);
+        let response = self
+            .communicator
+            .receive_response_with_timeout(id, Some(Duration::from_secs(10)))
+            .await
+            .map_err(|e| e as Box<dyn std::error::Error>)?;
 
-                    let symbols: Vec<lsp_types::SymbolInformation> =
-                        serde_json::from_value(response.result.unwrap()).unwrap();
+        match response {
+            Message::Response(response) => {
+                let symbols: Vec<lsp_types::SymbolInformation> =
+                    serde_json::from_value(response.result.unwrap()).unwrap();
 
-                    for symbol in symbols {
-                        match symbol.kind {
-                            SymbolKind::FUNCTION => println!("Function: {}", symbol.name),
-                            SymbolKind::STRUCT => println!("Struct: {}", symbol.name),
-                            _ => {}
-                        }
+                for symbol in symbols {
+                    match symbol.kind {
+                        SymbolKind::FUNCTION => println!("Function: {}", symbol.name),
+                        SymbolKind::STRUCT => println!("Struct: {}", symbol.name),
+                        _ => {}
                     }
-                    break;
                 }
-                Message::Error(_response) => {
-                    //println!("Error: {:#?}", response.error.unwrap());
-                    break;
-                }
-                Message::Notification(_notification) => {
-                    //println!("Notification {:#?}", notification);
-                }
+            }
+            Message::Error(_response) => {
+                // handle error
+            }
+            Message::Notification(_notification) => {
+                // ignore notifications here
             }
         }
 
@@ -103,22 +97,23 @@ impl LspClient {
 
     pub async fn shutdown(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let request = self.message_builder.create_request("shutdown", Some(""))?;
-        let request = SendMessage::Request(request);
 
-        self.communicator
-            .send_message(&request)
+        // send shutdown request and wait for response
+        let id = self
+            .communicator
+            .send_request(request)
             .await
             .map_err(|e| e as Box<dyn std::error::Error>)?;
+
         let _response = self
             .communicator
-            .receive_message()
+            .receive_response_with_timeout(id, Some(Duration::from_secs(10)))
             .await
             .map_err(|e| e as Box<dyn std::error::Error>)?;
 
         let notification = self.message_builder.create_notification("exit", Some(""))?;
-        let notification = SendMessage::Notification(notification);
         self.communicator
-            .send_message(&notification)
+            .send_notification(notification)
             .await
             .map_err(|e| e as Box<dyn std::error::Error>)?;
 
