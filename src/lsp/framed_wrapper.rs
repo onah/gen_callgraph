@@ -44,13 +44,13 @@ impl FramedTransport for FramedBox {
         let id = request.id;
         // serialize and send
         let s = serde_json::to_string(&request)?;
-        self.inner.send(&s).await?;
+        self.inner.write(&s).await?;
         Ok(id)
     }
 
     async fn send_notification(&mut self, notification: Notification) -> Result<(), DynError> {
         let s = serde_json::to_string(&notification)?;
-        self.inner.send(&s).await
+        self.inner.write(&s).await
     }
 
     async fn receive_response_with_timeout(

@@ -7,7 +7,7 @@ use std::error::Error;
 /// - `read` returns the JSON body string (header stripped).
 #[async_trait]
 pub trait LspTransport: Send + Sync {
-    async fn send(&mut self, json_body: &str) -> Result<(), Box<dyn Error + Send + Sync>>;
+    async fn write(&mut self, json_body: &str) -> Result<(), Box<dyn Error + Send + Sync>>;
     async fn read(&mut self) -> Result<String, Box<dyn Error + Send + Sync>>;
 }
 
@@ -30,7 +30,7 @@ mod tests {
 
     #[async_trait]
     impl LspTransport for InMemoryTransport {
-        async fn send(&mut self, json_body: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+        async fn write(&mut self, json_body: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
             let framed = format!("Content-Length: {}\r\n\r\n{}", json_body.len(), json_body);
             self.stream.write_all(framed.as_bytes()).await?;
             self.stream.flush().await?;
@@ -117,7 +117,7 @@ mod tests {
         });
 
         transport
-            .send("{\"jsonrpc\":\"2.0\",\"method\":\"test\",\"params\":{}}")
+            .write("{\"jsonrpc\":\"2.0\",\"method\":\"test\",\"params\":{}}")
             .await
             .expect("send failed");
 

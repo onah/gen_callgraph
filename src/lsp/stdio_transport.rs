@@ -13,7 +13,7 @@ pub struct StdioTransport {
 
 #[async_trait::async_trait]
 impl LspTransport for StdioTransport {
-    async fn send(&mut self, json_body: &str) -> Result<(), DynError> {
+    async fn write(&mut self, json_body: &str) -> Result<(), DynError> {
         let length = json_body.len();
         let header = format!("Content-Length: {}\r\n\r\n", length);
 
