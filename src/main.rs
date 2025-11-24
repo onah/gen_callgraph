@@ -3,16 +3,12 @@ mod lsp;
 
 use code_analysis::CodeAnalyzer;
 use lsp::stdio_transport::StdioTransport;
-use lsp::transport;
 use std::{thread, time};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (_child, writer, reader) = transport::start_rust_analyzer("rust-analyzer", &[])
-        .await
-        .expect("Failed to start rust-analyzer");
-
-    let stdio = StdioTransport::new(writer, reader);
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    //let stdio = StdioTransport::new(writer, reader);
+    let stdio = StdioTransport::spawn().await?;
     // Use the transport-based constructor so higher layers can provide transports.
     let lsp_client = lsp::LspClient::new(Box::new(stdio));
     let mut code_analyzer = CodeAnalyzer::new(lsp_client);

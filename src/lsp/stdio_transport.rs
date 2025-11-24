@@ -1,12 +1,14 @@
 // low-level stdio transport: framing (Content-Length) and raw read/write
 use crate::lsp::transport::LspTransport;
 use crate::lsp::DynError;
+use std::process::Stdio;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStdin, ChildStdout};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 pub struct StdioTransport {
     writer: ChildStdin,
     reader: BufReader<ChildStdout>,
+    _child: Option<Child>, // Keep child process handle if needed
 }
 
 #[async_trait::async_trait]
@@ -38,8 +40,17 @@ impl LspTransport for StdioTransport {
 }
 
 impl StdioTransport {
-    pub fn new(writer: ChildStdin, reader: BufReader<ChildStdout>) -> Self {
-        StdioTransport { writer, reader }
+    //pub fn new(writer: ChildStdin, reader: BufReader<ChildStdout>) -> Self {
+    //    StdioTransport { writer, reader }
+    //}
+
+    pub async fn spawn() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let (child, writer, reader) = start_rust_analyzer("rust-analyzer", &[]).await?;
+        Ok(StdioTransport {
+            writer,
+            reader,
+            _child: Some(child),
+        })
     }
 
     // High-level message send/receive methods belong to the framed layer.
@@ -96,3 +107,25 @@ impl StdioTransport {
 
 // Note: FramedTransport implementations are provided by `framed_wrapper.rs` (FramedBox),
 // which wraps a `Box<dyn LspTransport>` and provides message-level APIs.
+
+async fn start_rust_analyzer(
+    exe: &str,
+    args: &[&str],
+) -> Result<(Child, ChildStdin, BufReader<ChildStdout>), Box<dyn std::error::Error + Send + Sync>> {
+    let mut cmd = Command::new(exe);
+    for a in args {
+        cmd.arg(a);
+    }
+
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+
+    let writer = child.stdin.take().ok_or("failed to take child stdin")?;
+    let stdout = child.stdout.take().ok_or("failed to take child stdout")?;
+    let reader = BufReader::new(stdout);
+
+    Ok((child, writer, reader))
+}

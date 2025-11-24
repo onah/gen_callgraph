@@ -1,9 +1,6 @@
 //! LSP transport abstraction (framed Content-Length messages).
 use async_trait::async_trait;
 use std::error::Error;
-use std::process::Stdio;
-use tokio::io::BufReader;
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 /// Minimal async trait for LSP transport.
 /// - `send` takes a JSON body (not including LSP headers) and will frame it (Content-Length) and send.
@@ -12,31 +9,6 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 pub trait LspTransport: Send + Sync {
     async fn send(&mut self, json_body: &str) -> Result<(), Box<dyn Error + Send + Sync>>;
     async fn read(&mut self) -> Result<String, Box<dyn Error + Send + Sync>>;
-}
-
-/// Start a `rust-analyzer` (or another language server) process.
-/// Returns the spawned Child, a writer (ChildStdin) and a buffered reader (BufReader<ChildStdout>).
-/// This is a small convenience helper used by `main.rs` to keep process spawn logic out of the main file.
-pub async fn start_rust_analyzer(
-    exe: &str,
-    args: &[&str],
-) -> Result<(Child, ChildStdin, BufReader<ChildStdout>), Box<dyn std::error::Error + Send + Sync>> {
-    let mut cmd = Command::new(exe);
-    for a in args {
-        cmd.arg(a);
-    }
-
-    let mut child = cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()?;
-
-    let writer = child.stdin.take().ok_or("failed to take child stdin")?;
-    let stdout = child.stdout.take().ok_or("failed to take child stdout")?;
-    let reader = BufReader::new(stdout);
-
-    Ok((child, writer, reader))
 }
 
 #[cfg(test)]
