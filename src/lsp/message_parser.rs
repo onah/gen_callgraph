@@ -1,7 +1,7 @@
 use crate::lsp::types::{Message, Notification, ResponseError, ResponseMessage};
-use crate::lsp::DynError;
+use anyhow::anyhow;
 
-pub fn parse_notification(json: &serde_json::Value) -> Result<Option<Notification>, DynError> {
+pub fn parse_notification(json: &serde_json::Value) -> anyhow::Result<Option<Notification>> {
     if json.get("method").is_some() {
         let notification: Notification = serde_json::from_value(json.clone())?;
         return Ok(Some(notification));
@@ -9,7 +9,7 @@ pub fn parse_notification(json: &serde_json::Value) -> Result<Option<Notificatio
     Ok(None)
 }
 
-pub fn parse_response(json: &serde_json::Value) -> Result<Option<Message>, DynError> {
+pub fn parse_response(json: &serde_json::Value) -> anyhow::Result<Option<Message>> {
     if json.get("id").is_some() {
         if json.get("result").is_some() {
             let response: ResponseMessage = serde_json::from_value(json.clone())?;
@@ -23,7 +23,7 @@ pub fn parse_response(json: &serde_json::Value) -> Result<Option<Message>, DynEr
 }
 
 /// Parse a full JSON string (payload) into a `Message` (Notification/Response/Error).
-pub fn parse_message_from_str(s: &str) -> Result<Message, DynError> {
+pub fn parse_message_from_str(s: &str) -> anyhow::Result<Message> {
     let json: serde_json::Value = serde_json::from_str(s)?;
     if let Some(notification) = parse_notification(&json)? {
         return Ok(Message::Notification(notification));
@@ -31,5 +31,5 @@ pub fn parse_message_from_str(s: &str) -> Result<Message, DynError> {
     if let Some(response) = parse_response(&json)? {
         return Ok(response);
     }
-    Err("Other Message".into())
+    Err(anyhow!("Other Message"))
 }

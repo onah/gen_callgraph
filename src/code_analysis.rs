@@ -9,17 +9,17 @@ impl CodeAnalyzer {
         CodeAnalyzer { client }
     }
 
-    pub async fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn initialize(&mut self) -> anyhow::Result<()> {
         self.client.initialize().await?;
         Ok(())
     }
 
-    pub async fn get_all_function_list(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn get_all_function_list(&mut self) -> anyhow::Result<()> {
         self.client.get_all_function_list().await?;
         Ok(())
     }
 
-    pub async fn shutdown(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn shutdown(&mut self) -> anyhow::Result<()> {
         self.client.shutdown().await?;
         Ok(())
     }

@@ -1,6 +1,6 @@
 // low-level stdio transport: framing (Content-Length) and raw read/write
 use crate::lsp::transport::LspTransport;
-use crate::lsp::DynError;
+use anyhow::anyhow;
 use std::process::Stdio;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -13,29 +13,17 @@ pub struct StdioTransport {
 
 #[async_trait::async_trait]
 impl LspTransport for StdioTransport {
-    async fn write(&mut self, json_body: &str) -> Result<(), DynError> {
+    async fn write(&mut self, json_body: &str) -> anyhow::Result<()> {
         let length = json_body.len();
         let header = format!("Content-Length: {}\r\n\r\n", length);
-
-        self.writer
-            .write_all(header.as_bytes())
-            .await
-            .map_err(|e| Box::new(e) as DynError)?;
-        self.writer
-            .write_all(json_body.as_bytes())
-            .await
-            .map_err(|e| Box::new(e) as DynError)?;
-        self.writer
-            .flush()
-            .await
-            .map_err(|e| Box::new(e) as DynError)?;
+        self.writer.write_all(header.as_bytes()).await?;
+        self.writer.write_all(json_body.as_bytes()).await?;
+        self.writer.flush().await?;
         Ok(())
     }
 
-    async fn read(&mut self) -> Result<String, DynError> {
-        StdioTransport::read_message_buffer(self)
-            .await
-            .map_err(|e| Box::new(std::io::Error::other(e.to_string())) as DynError)
+    async fn read(&mut self) -> anyhow::Result<String> {
+        StdioTransport::read_message_buffer(self).await
     }
 }
 
@@ -44,8 +32,8 @@ impl StdioTransport {
     //    StdioTransport { writer, reader }
     //}
 
-    pub async fn spawn() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let (child, writer, reader) = start_rust_analyzer("rust-analyzer", &[]).await?;
+    pub fn spawn() -> anyhow::Result<Self> {
+        let (child, writer, reader) = start_rust_analyzer("rust-analyzer", &[])?;
         Ok(StdioTransport {
             writer,
             reader,
@@ -57,7 +45,7 @@ impl StdioTransport {
     // StdioTransport keeps low-level framing (read_message_buffer/get_content_length)
     // and implements `LspTransport` (send/read) which operate on raw JSON strings.
 
-    async fn read_message_buffer(&mut self) -> Result<String, Box<dyn std::error::Error>> {
+    async fn read_message_buffer(&mut self) -> anyhow::Result<String> {
         let mut header_buffer = Vec::new();
 
         // `&mut self.reader`を直接使用
@@ -88,7 +76,7 @@ impl StdioTransport {
         Ok(String::from_utf8(payload_buffer)?)
     }
 
-    fn get_content_length(&self, header: &str) -> Result<usize, Box<dyn std::error::Error>> {
+    fn get_content_length(&self, header: &str) -> anyhow::Result<usize> {
         // "Content-Length: " で始まる行を探す
         if let Some(content_length_line) = header
             .lines()
@@ -100,7 +88,7 @@ impl StdioTransport {
                 .parse::<usize>()?; // 数値に変換
             Ok(content_length)
         } else {
-            Err("Content-Length header not found".into())
+            Err(anyhow!("Content-Length header not found"))
         }
     }
 }
@@ -108,10 +96,10 @@ impl StdioTransport {
 // Note: FramedTransport implementations are provided by `framed_wrapper.rs` (FramedBox),
 // which wraps a `Box<dyn LspTransport>` and provides message-level APIs.
 
-async fn start_rust_analyzer(
+fn start_rust_analyzer(
     exe: &str,
     args: &[&str],
-) -> Result<(Child, ChildStdin, BufReader<ChildStdout>), Box<dyn std::error::Error + Send + Sync>> {
+) -> anyhow::Result<(Child, ChildStdin, BufReader<ChildStdout>)> {
     let mut cmd = Command::new(exe);
     for a in args {
         cmd.arg(a);
@@ -123,8 +111,14 @@ async fn start_rust_analyzer(
         .stderr(Stdio::inherit())
         .spawn()?;
 
-    let writer = child.stdin.take().ok_or("failed to take child stdin")?;
-    let stdout = child.stdout.take().ok_or("failed to take child stdout")?;
+    let writer = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow!("failed to take child stdin"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("failed to take child stdout"))?;
     let reader = BufReader::new(stdout);
 
     Ok((child, writer, reader))

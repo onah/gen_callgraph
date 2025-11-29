@@ -6,9 +6,9 @@ use lsp::stdio_transport::StdioTransport;
 use std::{thread, time};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn main() -> anyhow::Result<()> {
     //let stdio = StdioTransport::new(writer, reader);
-    let stdio = StdioTransport::spawn().await?;
+    let stdio = StdioTransport::spawn()?;
     // Use the transport-based constructor so higher layers can provide transports.
     let lsp_client = lsp::LspClient::new(Box::new(stdio));
     let mut code_analyzer = CodeAnalyzer::new(lsp_client);
@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
 
         //code_analyzer.get_main_function_location().await?;
-        Ok::<(), Box<dyn std::error::Error>>(())
+        Ok::<(), anyhow::Error>(())
     }
     .await;
 

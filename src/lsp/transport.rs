@@ -1,21 +1,19 @@
 //! LSP transport abstraction (framed Content-Length messages).
 use async_trait::async_trait;
-use std::error::Error;
 
 /// Minimal async trait for LSP transport.
 /// - `send` takes a JSON body (not including LSP headers) and will frame it (Content-Length) and send.
 /// - `read` returns the JSON body string (header stripped).
 #[async_trait]
 pub trait LspTransport: Send + Sync {
-    async fn write(&mut self, json_body: &str) -> Result<(), Box<dyn Error + Send + Sync>>;
-    async fn read(&mut self) -> Result<String, Box<dyn Error + Send + Sync>>;
+    async fn write(&mut self, json_body: &str) -> Result<(), anyhow::Error>;
+    async fn read(&mut self) -> Result<String, anyhow::Error>;
 }
 
 #[cfg(test)]
 mod tests {
     use super::LspTransport;
     use async_trait::async_trait;
-    use std::error::Error;
     use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt, DuplexStream};
 
     struct InMemoryTransport {
@@ -30,14 +28,14 @@ mod tests {
 
     #[async_trait]
     impl LspTransport for InMemoryTransport {
-        async fn write(&mut self, json_body: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+        async fn write(&mut self, json_body: &str) -> Result<(), anyhow::Error> {
             let framed = format!("Content-Length: {}\r\n\r\n{}", json_body.len(), json_body);
             self.stream.write_all(framed.as_bytes()).await?;
             self.stream.flush().await?;
             Ok(())
         }
 
-        async fn read(&mut self) -> Result<String, Box<dyn Error + Send + Sync>> {
+        async fn read(&mut self) -> Result<String, anyhow::Error> {
             // read header until \r\n\r\n
             let mut header_buffer: Vec<u8> = Vec::new();
             loop {
@@ -58,7 +56,7 @@ mod tests {
                     }
                 }
             }
-            let len = content_length.ok_or("no content-length")?;
+            let len = content_length.ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "no content-length"))?;
             let mut body = vec![0u8; len];
             self.stream.read_exact(&mut body).await?;
             Ok(String::from_utf8(body)?)

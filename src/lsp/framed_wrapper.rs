@@ -2,7 +2,6 @@ use crate::lsp::framed::FramedTransport;
 use crate::lsp::message_parser::parse_message_from_str;
 use crate::lsp::transport::LspTransport;
 use crate::lsp::types::{Message, Notification, Request};
-use crate::lsp::DynError;
 use async_trait::async_trait;
 use std::time::Duration;
 
@@ -20,7 +19,7 @@ impl FramedBox {
 
 #[async_trait]
 impl FramedTransport for FramedBox {
-    async fn receive_response(&mut self, id: i32) -> Result<Message, DynError> {
+    async fn receive_response(&mut self, id: i32) -> anyhow::Result<Message> {
         loop {
             let buffer = self.inner.read().await?;
             let message = parse_message_from_str(&buffer)?;
@@ -40,7 +39,7 @@ impl FramedTransport for FramedBox {
         }
     }
 
-    async fn send_request(&mut self, request: Request) -> Result<i32, DynError> {
+    async fn send_request(&mut self, request: Request) -> anyhow::Result<i32> {
         let id = request.id;
         // serialize and send
         let s = serde_json::to_string(&request)?;
@@ -48,7 +47,7 @@ impl FramedTransport for FramedBox {
         Ok(id)
     }
 
-    async fn send_notification(&mut self, notification: Notification) -> Result<(), DynError> {
+    async fn send_notification(&mut self, notification: Notification) -> anyhow::Result<()> {
         let s = serde_json::to_string(&notification)?;
         self.inner.write(&s).await
     }
@@ -57,16 +56,17 @@ impl FramedTransport for FramedBox {
         &mut self,
         id: i32,
         timeout: Option<Duration>,
-    ) -> Result<Message, DynError> {
+    ) -> anyhow::Result<Message> {
         match timeout {
             Some(dur) => {
                 let fut = self.receive_response(id);
                 match tokio::time::timeout(dur, fut).await {
                     Ok(res) => res,
-                    Err(_) => Err(Box::new(std::io::Error::new(
+                    Err(_) => Err(std::io::Error::new(
                         std::io::ErrorKind::TimedOut,
                         "response timeout",
-                    )) as DynError),
+                    )
+                    .into()),
                 }
             }
             None => self.receive_response(id).await,

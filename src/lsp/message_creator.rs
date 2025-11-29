@@ -34,7 +34,7 @@ impl MessageBuilder {
         &mut self,
         method: &str,
         params: T,
-    ) -> Result<Request, Box<dyn std::error::Error>> {
+    ) -> anyhow::Result<Request> {
         let value = serde_json::to_value(params)?;
         let id = self.message_factory.get_id();
         Ok(Request::new(id, method.to_string(), value))
@@ -44,12 +44,12 @@ impl MessageBuilder {
         &mut self,
         method: &str,
         params: T,
-    ) -> Result<Notification, Box<dyn std::error::Error>> {
+    ) -> anyhow::Result<Notification> {
         let value = serde_json::to_value(params)?;
         Ok(Notification::new(method.to_string(), value))
     }
 
-    pub fn initialize(&mut self) -> Result<Request, Box<dyn std::error::Error>> {
+    pub fn initialize(&mut self) -> anyhow::Result<Request> {
         let initialize_params = InitializeParams {
             process_id: Some(std::process::id()),
             workspace_folders: Some(vec![WorkspaceFolder {
@@ -85,7 +85,7 @@ impl MessageBuilder {
         Ok(request)
     }
 
-    pub fn initialized_notification(&mut self) -> Result<Notification, Box<dyn std::error::Error>> {
+    pub fn initialized_notification(&mut self) -> anyhow::Result<Notification> {
         let notification = self.create_notification("initialized", "")?;
         Ok(notification)
     }

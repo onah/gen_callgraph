@@ -7,7 +7,7 @@ pub mod transport;
 pub mod types;
 
 /// Common boxed error type for LSP module boundaries.
-pub type DynError = Box<dyn std::error::Error + Send + Sync>;
+// Using `anyhow::Error` directly across the codebase; removed `DynError` alias.
 
 use crate::lsp::framed::FramedTransport;
 use crate::lsp::types::Message;
@@ -29,47 +29,36 @@ impl LspClient {
         }
     }
 
-    pub async fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn initialize(&mut self) -> anyhow::Result<()> {
         let request = self.message_builder.initialize()?;
         // send request via framed transport and wait for response
-        let id = self
-            .communicator
-            .send_request(request)
-            .await
-            .map_err(|e| e as Box<dyn std::error::Error>)?;
+        let id = self.communicator.send_request(request).await?;
         let _resp = self
             .communicator
             .receive_response_with_timeout(id, Some(Duration::from_secs(10)))
-            .await
-            .map_err(|e| e as Box<dyn std::error::Error>)?;
+            .await?;
 
         let initialized_notification = self.message_builder.initialized_notification()?;
         // send initialized notification
         self.communicator
             .send_notification(initialized_notification)
-            .await
-            .map_err(|e| e as Box<dyn std::error::Error>)?;
+            .await?;
 
         Ok(())
     }
 
-    pub async fn get_all_function_list(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn get_all_function_list(&mut self) -> anyhow::Result<()> {
         let request = self
             .message_builder
             .create_request("workspace/symbol", Some(serde_json::json!({"query": ""})))?;
 
         // send request and wait for response
-        let id = self
-            .communicator
-            .send_request(request)
-            .await
-            .map_err(|e| e as Box<dyn std::error::Error>)?;
+        let id = self.communicator.send_request(request).await?;
 
         let response = self
             .communicator
             .receive_response_with_timeout(id, Some(Duration::from_secs(10)))
-            .await
-            .map_err(|e| e as Box<dyn std::error::Error>)?;
+            .await?;
 
         match response {
             Message::Response(response) => {
@@ -95,27 +84,19 @@ impl LspClient {
         Ok(())
     }
 
-    pub async fn shutdown(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn shutdown(&mut self) -> anyhow::Result<()> {
         let request = self.message_builder.create_request("shutdown", Some(""))?;
 
         // send shutdown request and wait for response
-        let id = self
-            .communicator
-            .send_request(request)
-            .await
-            .map_err(|e| e as Box<dyn std::error::Error>)?;
+        let id = self.communicator.send_request(request).await?;
 
         let _response = self
             .communicator
             .receive_response_with_timeout(id, Some(Duration::from_secs(10)))
-            .await
-            .map_err(|e| e as Box<dyn std::error::Error>)?;
+            .await?;
 
         let notification = self.message_builder.create_notification("exit", Some(""))?;
-        self.communicator
-            .send_notification(notification)
-            .await
-            .map_err(|e| e as Box<dyn std::error::Error>)?;
+        self.communicator.send_notification(notification).await?;
 
         Ok(())
     }
