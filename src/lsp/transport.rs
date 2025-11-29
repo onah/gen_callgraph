@@ -56,7 +56,9 @@ mod tests {
                     }
                 }
             }
-            let len = content_length.ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "no content-length"))?;
+            let len = content_length.ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "no content-length")
+            })?;
             let mut body = vec![0u8; len];
             self.stream.read_exact(&mut body).await?;
             Ok(String::from_utf8(body)?)
