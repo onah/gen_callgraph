@@ -1,14 +1,19 @@
 mod code_analysis;
 mod lsp;
-
+use anyhow::anyhow;
 use code_analysis::CodeAnalyzer;
 use lsp::stdio_transport::StdioTransport;
+use std::process::Stdio;
 use std::{thread, time};
+use tokio::io::BufReader;
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    //let stdio = StdioTransport::new(writer, reader);
-    let stdio = StdioTransport::spawn()?;
+    //let stdio = StdioTransport::spawn()?;
+    let (_child, writer, reader) = start_rust_analyzer("rust-analyzer", &[])?;
+    let stdio = StdioTransport::new(writer, reader);
+
     // Use the transport-based constructor so higher layers can provide transports.
     let lsp_client = lsp::LspClient::new(Box::new(stdio));
     let mut code_analyzer = CodeAnalyzer::new(lsp_client);
@@ -38,4 +43,32 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn start_rust_analyzer(
+    exe: &str,
+    args: &[&str],
+) -> anyhow::Result<(Child, ChildStdin, BufReader<ChildStdout>)> {
+    let mut cmd = Command::new(exe);
+    for a in args {
+        cmd.arg(a);
+    }
+
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+
+    let writer = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow!("failed to take child stdin"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("failed to take child stdout"))?;
+    let reader = BufReader::new(stdout);
+
+    Ok((child, writer, reader))
 }
