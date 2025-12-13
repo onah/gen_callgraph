@@ -11,16 +11,16 @@ pub struct StdioTransport {
 
 #[async_trait::async_trait]
 impl LspTransport for StdioTransport {
-    async fn write(&mut self, json_body: &str) -> anyhow::Result<()> {
+    async fn write(&mut self, json_body: &[u8]) -> anyhow::Result<()> {
         let length = json_body.len();
         let header = format!("Content-Length: {}\r\n\r\n", length);
         self.writer.write_all(header.as_bytes()).await?;
-        self.writer.write_all(json_body.as_bytes()).await?;
+        self.writer.write_all(json_body).await?;
         self.writer.flush().await?;
         Ok(())
     }
 
-    async fn read(&mut self) -> anyhow::Result<String> {
+    async fn read(&mut self) -> anyhow::Result<Vec<u8>> {
         let mut header_buffer = Vec::new();
 
         loop {
@@ -37,7 +37,7 @@ impl LspTransport for StdioTransport {
         let mut payload_buffer = vec![0u8; content_length];
         self.reader.read_exact(&mut payload_buffer).await?;
 
-        Ok(String::from_utf8(payload_buffer)?)
+        Ok(payload_buffer)
     }
 }
 

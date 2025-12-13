@@ -21,10 +21,9 @@ pub fn parse_response(json: &serde_json::Value) -> anyhow::Result<Option<Message
     }
     Ok(None)
 }
-
-/// Parse a full JSON string (payload) into a `Message` (Notification/Response/Error).
-pub fn parse_message_from_str(s: &str) -> anyhow::Result<Message> {
-    let json: serde_json::Value = serde_json::from_str(s)?;
+/// Parse a full JSON payload (bytes) into a `Message` (Notification/Response/Error).
+pub fn parse_message_from_slice(s: &[u8]) -> anyhow::Result<Message> {
+    let json: serde_json::Value = serde_json::from_slice(s)?;
     if let Some(notification) = parse_notification(&json)? {
         return Ok(Message::Notification(notification));
     }

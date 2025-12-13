@@ -7,7 +7,7 @@ pub mod transport;
 pub mod types;
 
 /// Common boxed error type for LSP module boundaries.
-// Using `anyhow::Error` directly across the codebase; removed `DynError` alias.
+// Using `anyhow::Error` directly across the codebase; removed `DynError alias.
 use crate::lsp::framed::FramedTransport;
 use crate::lsp::types::Message;
 use lsp_types::SymbolKind;

@@ -1,5 +1,5 @@
 use crate::lsp::framed::FramedTransport;
-use crate::lsp::message_parser::parse_message_from_str;
+use crate::lsp::message_parser::parse_message_from_slice;
 use crate::lsp::transport::LspTransport;
 use crate::lsp::types::{Message, Notification, Request};
 use async_trait::async_trait;
@@ -22,7 +22,7 @@ impl FramedTransport for FramedBox {
     async fn receive_response(&mut self, id: i32) -> anyhow::Result<Message> {
         loop {
             let buffer = self.inner.read().await?;
-            let message = parse_message_from_str(&buffer)?;
+            let message = parse_message_from_slice(&buffer)?;
             if let Message::Response(ref response) = message {
                 if response.id == id {
                     return Ok(message);
@@ -42,13 +42,13 @@ impl FramedTransport for FramedBox {
     async fn send_request(&mut self, request: Request) -> anyhow::Result<i32> {
         let id = request.id;
         // serialize and send
-        let s = serde_json::to_string(&request)?;
+        let s = serde_json::to_vec(&request)?;
         self.inner.write(&s).await?;
         Ok(id)
     }
 
     async fn send_notification(&mut self, notification: Notification) -> anyhow::Result<()> {
-        let s = serde_json::to_string(&notification)?;
+        let s = serde_json::to_vec(&notification)?;
         self.inner.write(&s).await
     }
 
