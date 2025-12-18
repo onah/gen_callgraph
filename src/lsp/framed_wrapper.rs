@@ -8,12 +8,12 @@ use std::time::Duration;
 // Convenience impl for boxed transports (trait objects)
 // FramedBox: convenience wrapper for boxed trait objects
 pub struct FramedBox {
-    inner: Box<dyn LspTransport + Send + Sync>,
+    transport: Box<dyn LspTransport + Send + Sync>,
 }
 
 impl FramedBox {
-    pub fn new(inner: Box<dyn LspTransport + Send + Sync>) -> Self {
-        FramedBox { inner }
+    pub fn new(transport: Box<dyn LspTransport + Send + Sync>) -> Self {
+        FramedBox { transport }
     }
 }
 
@@ -21,7 +21,7 @@ impl FramedBox {
 impl FramedTransport for FramedBox {
     async fn receive_response(&mut self, id: i32) -> anyhow::Result<Message> {
         loop {
-            let buffer = self.inner.read().await?;
+            let buffer = self.transport.read().await?;
             let message = parse_message_from_slice(&buffer)?;
             if let Message::Response(ref response) = message {
                 if response.id == id {
@@ -43,13 +43,13 @@ impl FramedTransport for FramedBox {
         let id = request.id;
         // serialize and send
         let s = serde_json::to_vec(&request)?;
-        self.inner.write(&s).await?;
+        self.transport.write(&s).await?;
         Ok(id)
     }
 
     async fn send_notification(&mut self, notification: Notification) -> anyhow::Result<()> {
         let s = serde_json::to_vec(&notification)?;
-        self.inner.write(&s).await
+        self.transport.write(&s).await
     }
 
     async fn receive_response_with_timeout(
