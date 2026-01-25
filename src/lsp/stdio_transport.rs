@@ -1,16 +1,26 @@
 // low-level stdio transport: framing (Content-Length) and raw read/write
 use crate::lsp::transport::LspTransport;
 use anyhow::anyhow;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStdin, ChildStdout};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+/*
 pub struct StdioTransport {
     writer: ChildStdin,
     reader: BufReader<ChildStdout>,
 }
+*/
+
+pub struct StdioTransport<W, R> {
+    writer: W,
+    reader: R,
+}
 
 #[async_trait::async_trait]
-impl LspTransport for StdioTransport {
+impl<W, R> LspTransport for StdioTransport<W, R>
+where
+    W: AsyncWriteExt + Unpin + Send + Sync + 'static,
+    R: AsyncReadExt + Unpin + Send + Sync + 'static,
+{
     async fn write(&mut self, json_body: &[u8]) -> anyhow::Result<()> {
         let length = json_body.len();
         let header = format!("Content-Length: {}\r\n\r\n", length);
@@ -41,8 +51,12 @@ impl LspTransport for StdioTransport {
     }
 }
 
-impl StdioTransport {
-    pub fn new(writer: ChildStdin, reader: BufReader<ChildStdout>) -> StdioTransport {
+impl<W, R> StdioTransport<W, R>
+where
+    W: AsyncWriteExt + Unpin + Send + Sync + 'static,
+    R: AsyncReadExt + Unpin + Send + Sync + 'static,
+{
+    pub fn new(writer: W, reader: R) -> StdioTransport<W, R> {
         StdioTransport { writer, reader }
     }
 }
