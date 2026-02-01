@@ -7,6 +7,7 @@ use std::process::Stdio;
 use std::{thread, time};
 use tokio::io::BufReader;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use std::env;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -15,7 +16,14 @@ async fn main() -> anyhow::Result<()> {
     let stdio = StdioTransport::new(writer, reader);
 
     // Use the transport-based constructor so higher layers can provide transports.
-    let lsp_client = lsp::LspClient::new(Box::new(stdio));
+    let workspace = env::args().nth(1).map(|s| s).unwrap_or_else(|| {
+        std::env::current_dir()
+            .ok()
+            .and_then(|p| p.to_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| String::from("."))
+    });
+
+    let lsp_client = lsp::LspClient::new(Box::new(stdio), workspace);
     let mut code_analyzer = CodeAnalyzer::new(lsp_client);
 
     let _result = async {

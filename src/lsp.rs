@@ -16,20 +16,27 @@ use std::time::Duration;
 pub struct LspClient {
     communicator: Box<dyn FramedTransport + Send + Sync>,
     message_builder: message_creator::MessageBuilder,
+    workspace_root: String,
 }
 
 impl LspClient {
-    pub fn new(transport: Box<dyn crate::lsp::transport::LspTransport + Send + Sync>) -> Self {
+    pub fn new(
+        transport: Box<dyn crate::lsp::transport::LspTransport + Send + Sync>,
+        workspace_root: String,
+    ) -> Self {
         let message_builder = message_creator::MessageBuilder::new();
         let framed = crate::lsp::framed_wrapper::FramedBox::new(transport);
         LspClient {
             communicator: Box::new(framed),
             message_builder,
+            workspace_root,
         }
     }
 
     pub async fn initialize(&mut self) -> anyhow::Result<()> {
-        let request = self.message_builder.initialize()?;
+        let request = self
+            .message_builder
+            .initialize(&self.workspace_root)?;
         // send request via framed transport and wait for response
         let id = self.communicator.send_request(request).await?;
         let _resp = self

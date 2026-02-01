@@ -49,11 +49,12 @@ impl MessageBuilder {
         Ok(Notification::new(method.to_string(), value))
     }
 
-    pub fn initialize(&mut self) -> anyhow::Result<Request> {
+    pub fn initialize(&mut self, workspace_path: &str) -> anyhow::Result<Request> {
+        let uri = lsp_types::Url::parse(&format!("file://{}", workspace_path))?;
         let initialize_params = InitializeParams {
             process_id: Some(std::process::id()),
             workspace_folders: Some(vec![WorkspaceFolder {
-                uri: lsp_types::Url::parse("file:///c:/Users/PCuser/Work/rust/gen_callgraph")?,
+                uri,
                 name: String::from("gen_callgraph"),
             }]),
             capabilities: ClientCapabilities {
