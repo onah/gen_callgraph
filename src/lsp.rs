@@ -10,7 +10,7 @@ pub mod types;
 // Using `anyhow::Error` directly across the codebase; removed `DynError alias.
 use crate::lsp::framed::FramedTransport;
 use crate::lsp::types::Message;
-use lsp_types::{CallHierarchyItem, CallHierarchyOutgoingCall, SymbolKind, SymbolInformation};
+use lsp_types::{CallHierarchyItem, CallHierarchyOutgoingCall, SymbolInformation, SymbolKind};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -157,10 +157,14 @@ impl LspClient {
         }
     }
 
-    async fn find_function_symbol(&mut self, query: &str) -> anyhow::Result<Option<SymbolInformation>> {
-        let request = self
-            .message_builder
-            .create_request("workspace/symbol", Some(serde_json::json!({"query": query})))?;
+    async fn find_function_symbol(
+        &mut self,
+        query: &str,
+    ) -> anyhow::Result<Option<SymbolInformation>> {
+        let request = self.message_builder.create_request(
+            "workspace/symbol",
+            Some(serde_json::json!({"query": query})),
+        )?;
 
         let id = self.communicator.send_request(request).await?;
         let response = self
@@ -224,9 +228,9 @@ impl LspClient {
 
         match response {
             Message::Response(response) => {
-                let result = response
-                    .result
-                    .ok_or_else(|| anyhow::anyhow!("prepareCallHierarchy response has no result"))?;
+                let result = response.result.ok_or_else(|| {
+                    anyhow::anyhow!("prepareCallHierarchy response has no result")
+                })?;
                 let items: Vec<CallHierarchyItem> = serde_json::from_value(result)?;
                 Ok(items)
             }
@@ -239,9 +243,10 @@ impl LspClient {
         &mut self,
         item: &CallHierarchyItem,
     ) -> anyhow::Result<Vec<CallHierarchyOutgoingCall>> {
-        let request = self
-            .message_builder
-            .create_request("callHierarchy/outgoingCalls", Some(serde_json::json!({"item": item})))?;
+        let request = self.message_builder.create_request(
+            "callHierarchy/outgoingCalls",
+            Some(serde_json::json!({"item": item})),
+        )?;
 
         let id = self.communicator.send_request(request).await?;
         let response = self
@@ -509,10 +514,7 @@ impl LspClient {
 
                 let to_id = Self::call_item_key(&child);
                 let to_meta = Self::resolve_function_meta(&child, &function_symbols);
-                node_info.insert(
-                    to_id.clone(),
-                    (to_meta.qualified_label, to_meta.group),
-                );
+                node_info.insert(to_id.clone(), (to_meta.qualified_label, to_meta.group));
                 visited_edges.insert((from_id.clone(), to_id.clone()));
 
                 if !visited_nodes.contains(&to_id) {
