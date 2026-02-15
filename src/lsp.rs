@@ -12,7 +12,7 @@ use crate::lsp::framed::FramedTransport;
 use crate::lsp::types::Message;
 use lsp_types::{CallHierarchyItem, CallHierarchyOutgoingCall, SymbolInformation, SymbolKind};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
@@ -45,6 +45,7 @@ pub struct LspClient {
     message_builder: message_creator::MessageBuilder,
     workspace_root: String,
     workspace_root_path: PathBuf,
+    crate_name: String,
 }
 
 impl LspClient {
@@ -56,12 +57,36 @@ impl LspClient {
         let framed = crate::lsp::framed_wrapper::FramedBox::new(transport);
         let workspace_root_path = std::fs::canonicalize(&workspace_root)
             .unwrap_or_else(|_| PathBuf::from(workspace_root.clone()));
+        let crate_name =
+            Self::read_crate_name(&workspace_root_path).unwrap_or_else(|| String::from("crate"));
         LspClient {
             communicator: Box::new(framed),
             message_builder,
             workspace_root,
             workspace_root_path,
+            crate_name,
         }
+    }
+
+    fn read_crate_name(workspace_root_path: &Path) -> Option<String> {
+        let cargo = workspace_root_path.join("Cargo.toml");
+        let text = std::fs::read_to_string(cargo).ok()?;
+        let mut in_package = false;
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('[') {
+                in_package = trimmed == "[package]";
+                continue;
+            }
+            if in_package && trimmed.starts_with("name") {
+                let (_, rhs) = trimmed.split_once('=')?;
+                let value = rhs.trim().trim_matches('"').trim();
+                if !value.is_empty() {
+                    return Some(value.to_string());
+                }
+            }
+        }
+        None
     }
 
     fn is_uri_in_workspace(&self, uri: &lsp_types::Url) -> bool {
@@ -279,6 +304,7 @@ impl LspClient {
     }
 
     fn resolve_function_meta(
+        &self,
         item: &CallHierarchyItem,
         function_symbols: &[SymbolInformation],
     ) -> FunctionMeta {
@@ -349,6 +375,13 @@ impl LspClient {
             };
         }
 
+        if let Some(module) = self.infer_module_owner_from_uri(item) {
+            return FunctionMeta {
+                qualified_label: format!("{}::{}", module, item.name),
+                group: module,
+            };
+        }
+
         FunctionMeta {
             qualified_label: item.name.clone(),
             group: String::from("global"),
@@ -367,7 +400,7 @@ impl LspClient {
         let fn_line = Self::find_nearest_fn_line(&lines, target_line, &item.name)?;
 
         for start in (0..=fn_line).rev() {
-            if !lines[start].contains("impl") {
+            if !Self::looks_like_impl_header_start(lines[start]) {
                 continue;
             }
 
@@ -386,6 +419,14 @@ impl LspClient {
         }
 
         None
+    }
+
+    fn looks_like_impl_header_start(line: &str) -> bool {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("impl ")
+            || trimmed.starts_with("impl<")
+            || trimmed.starts_with("unsafe impl ")
+            || trimmed.starts_with("unsafe impl<")
     }
 
     fn find_nearest_fn_line(lines: &[&str], target_line: usize, fn_name: &str) -> Option<usize> {
@@ -468,6 +509,43 @@ impl LspClient {
         }
     }
 
+    fn infer_module_owner_from_uri(&self, item: &CallHierarchyItem) -> Option<String> {
+        let path = item.uri.to_file_path().ok()?;
+        let rel = path.strip_prefix(&self.workspace_root_path).ok()?;
+
+        // src/main.rs and src/lib.rs are treated as project root module (crate name).
+        if rel == Path::new("src/main.rs") || rel == Path::new("src/lib.rs") {
+            return Some(self.crate_name.clone());
+        }
+
+        if !rel.starts_with("src") {
+            return None;
+        }
+
+        let no_src = rel.strip_prefix("src").ok()?;
+        let mut parts: Vec<String> = no_src
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        if parts.is_empty() {
+            return None;
+        }
+
+        if let Some(last) = parts.last_mut() {
+            if last == "mod.rs" {
+                parts.pop();
+            } else if let Some(stem) = last.strip_suffix(".rs") {
+                *last = stem.to_string();
+            }
+        }
+
+        if parts.is_empty() {
+            return Some(self.crate_name.clone());
+        }
+
+        Some(parts.join("::"))
+    }
+
     pub async fn collect_call_graph_from(&mut self, entry: &str) -> anyhow::Result<CallGraph> {
         let function_symbols = self.get_workspace_function_symbols().await?;
 
@@ -494,7 +572,7 @@ impl LspClient {
             }
 
             let from_id = Self::call_item_key(&item);
-            let from_meta = Self::resolve_function_meta(&item, &function_symbols);
+            let from_meta = self.resolve_function_meta(&item, &function_symbols);
             node_info.insert(
                 from_id.clone(),
                 (from_meta.qualified_label, from_meta.group),
@@ -513,7 +591,7 @@ impl LspClient {
                 }
 
                 let to_id = Self::call_item_key(&child);
-                let to_meta = Self::resolve_function_meta(&child, &function_symbols);
+                let to_meta = self.resolve_function_meta(&child, &function_symbols);
                 node_info.insert(to_id.clone(), (to_meta.qualified_label, to_meta.group));
                 visited_edges.insert((from_id.clone(), to_id.clone()));
 

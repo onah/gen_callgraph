@@ -22,7 +22,6 @@ pub struct FramedBox {
     pending_senders: Arc<Mutex<HashMap<i32, oneshot::Sender<Message>>>>,
     // receiver map is used by callers to await responses
     pending_receivers: Arc<Mutex<HashMap<i32, oneshot::Receiver<Message>>>>,
-
 }
 
 impl FramedBox {
