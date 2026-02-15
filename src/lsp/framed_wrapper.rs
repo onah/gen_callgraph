@@ -13,87 +13,6 @@ enum Outgoing {
     Notification(Notification),
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::lsp::message_creator::MessageBuilder;
-    use crate::lsp::transport::LspTransport;
-    use crate::lsp::types::Message as LspMessage;
-    use anyhow::Result;
-    use std::sync::Arc;
-    use tokio::sync::{mpsc, Mutex};
-
-    struct MockTransport {
-        write_tx: mpsc::Sender<Vec<u8>>,
-        read_rx: Arc<Mutex<mpsc::Receiver<Vec<u8>>>>,
-    }
-
-    #[async_trait::async_trait]
-    impl LspTransport for MockTransport {
-        async fn write(&mut self, json_body: &[u8]) -> Result<(), anyhow::Error> {
-            self.write_tx
-                .send(json_body.to_vec())
-                .await
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-            Ok(())
-        }
-
-        async fn read(&mut self) -> Result<Vec<u8>, anyhow::Error> {
-            let mut rx = self.read_rx.lock().await;
-            match rx.recv().await {
-                Some(v) => Ok(v),
-                None => Err(anyhow::anyhow!("mock read closed")),
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn basic_request_response() -> Result<()> {
-        let (to_server_tx, mut to_server_rx) = mpsc::channel::<Vec<u8>>(8);
-        let (to_client_tx, to_client_rx) = mpsc::channel::<Vec<u8>>(8);
-
-        let transport = MockTransport {
-            write_tx: to_server_tx.clone(),
-            read_rx: Arc::new(Mutex::new(to_client_rx)),
-        };
-
-        let mut client = FramedBox::new(Box::new(transport));
-
-        // spawn mock server that echos a response with same id
-        tokio::spawn(async move {
-            while let Some(req_bytes) = to_server_rx.recv().await {
-                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&req_bytes) {
-                    if let Some(id) = json.get("id") {
-                        let resp = serde_json::json!({
-                            "jsonrpc": "2.0",
-                            "id": id,
-                            "result": {"ok": true}
-                        });
-                        let _ = to_client_tx.send(serde_json::to_vec(&resp).unwrap()).await;
-                    }
-                }
-            }
-        });
-
-        let mut builder = MessageBuilder::new();
-        let req = builder.create_request("test/method", serde_json::json!({"a":1}))?;
-        let id = client.send_request(req).await?;
-
-        let msg = client
-            .receive_response_with_timeout(id, Some(std::time::Duration::from_secs(1)))
-            .await?;
-        match msg {
-            LspMessage::Response(r) => {
-                assert_eq!(r.id, id);
-                assert!(r.result.is_some());
-            }
-            _ => panic!("expected response"),
-        }
-
-        Ok(())
-    }
-}
-
 /// Async framed transport wrapper that runs a single background task
 /// owning the `LspTransport`. It supports concurrent requests by
 /// registering pending oneshot channels keyed by request id.
@@ -103,14 +22,13 @@ pub struct FramedBox {
     pending_senders: Arc<Mutex<HashMap<i32, oneshot::Sender<Message>>>>,
     // receiver map is used by callers to await responses
     pending_receivers: Arc<Mutex<HashMap<i32, oneshot::Receiver<Message>>>>,
-    // notifications from server are sent to this receiver
-    notification_rx: mpsc::Receiver<Notification>,
+
 }
 
 impl FramedBox {
     pub fn new(transport: Box<dyn LspTransport + Send + Sync + 'static>) -> Self {
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<Outgoing>(32);
-        let (notification_tx, notification_rx) = mpsc::channel::<Notification>(32);
+        let (notification_tx, _notification_rx) = mpsc::channel::<Notification>(32);
 
         let pending_senders: Arc<Mutex<HashMap<i32, oneshot::Sender<Message>>>> =
             Arc::new(Mutex::new(HashMap::new()));
@@ -200,22 +118,12 @@ impl FramedBox {
             outgoing_tx,
             pending_senders,
             pending_receivers,
-            notification_rx,
         }
-    }
-
-    /// Receive next server notification (if any). Caller can await this.
-    pub async fn recv_notification(&mut self) -> Option<Notification> {
-        self.notification_rx.recv().await
     }
 }
 
 #[async_trait]
 impl FramedTransport for FramedBox {
-    async fn receive_response(&mut self, id: i32) -> anyhow::Result<Message> {
-        self.receive_response_with_timeout(id, None).await
-    }
-
     async fn send_request(&mut self, request: Request) -> anyhow::Result<i32> {
         let id = request.id;
         let (tx, rx) = oneshot::channel();
@@ -272,5 +180,86 @@ impl FramedTransport for FramedBox {
         } else {
             Err(anyhow::anyhow!("no pending receiver for id"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lsp::message_creator::MessageBuilder;
+    use crate::lsp::transport::LspTransport;
+    use crate::lsp::types::Message as LspMessage;
+    use anyhow::Result;
+    use std::sync::Arc;
+    use tokio::sync::{mpsc, Mutex};
+
+    struct MockTransport {
+        write_tx: mpsc::Sender<Vec<u8>>,
+        read_rx: Arc<Mutex<mpsc::Receiver<Vec<u8>>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl LspTransport for MockTransport {
+        async fn write(&mut self, json_body: &[u8]) -> Result<(), anyhow::Error> {
+            self.write_tx
+                .send(json_body.to_vec())
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            Ok(())
+        }
+
+        async fn read(&mut self) -> Result<Vec<u8>, anyhow::Error> {
+            let mut rx = self.read_rx.lock().await;
+            match rx.recv().await {
+                Some(v) => Ok(v),
+                None => Err(anyhow::anyhow!("mock read closed")),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn basic_request_response() -> Result<()> {
+        let (to_server_tx, mut to_server_rx) = mpsc::channel::<Vec<u8>>(8);
+        let (to_client_tx, to_client_rx) = mpsc::channel::<Vec<u8>>(8);
+
+        let transport = MockTransport {
+            write_tx: to_server_tx.clone(),
+            read_rx: Arc::new(Mutex::new(to_client_rx)),
+        };
+
+        let mut client = FramedBox::new(Box::new(transport));
+
+        // spawn mock server that echos a response with same id
+        tokio::spawn(async move {
+            while let Some(req_bytes) = to_server_rx.recv().await {
+                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&req_bytes) {
+                    if let Some(id) = json.get("id") {
+                        let resp = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {"ok": true}
+                        });
+                        let _ = to_client_tx.send(serde_json::to_vec(&resp).unwrap()).await;
+                    }
+                }
+            }
+        });
+
+        let mut builder = MessageBuilder::new();
+        let req = builder.create_request("test/method", serde_json::json!({"a":1}))?;
+        let id = client.send_request(req).await?;
+
+        let msg = client
+            .receive_response_with_timeout(id, Some(std::time::Duration::from_secs(1)))
+            .await?;
+        match msg {
+            LspMessage::Response(r) => {
+                assert_eq!(r.id, id);
+                assert!(r.result.is_some());
+            }
+            _ => panic!("expected response"),
+        }
+
+        Ok(())
     }
 }

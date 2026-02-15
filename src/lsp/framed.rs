@@ -3,7 +3,6 @@ use async_trait::async_trait;
 
 #[async_trait]
 pub trait FramedTransport: Send + Sync {
-    async fn receive_response(&mut self, id: i32) -> anyhow::Result<Message>;
     // New higher-level APIs (non-breaking additions).
     // - `send_request` should register the pending receiver internally and send the request payload.
     //   It returns the assigned request id on success.
