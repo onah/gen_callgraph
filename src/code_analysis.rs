@@ -19,9 +19,9 @@ impl CodeAnalyzer {
         Ok(())
     }
 
-    pub async fn print_call_order_from(&mut self, entry: &str) -> anyhow::Result<()> {
-        self.client.print_call_order_from(entry).await?;
-        Ok(())
+    pub async fn generate_call_graph_dot(&mut self, entry: &str) -> anyhow::Result<String> {
+        let graph = self.client.collect_call_graph_from(entry).await?;
+        Ok(crate::dot::to_dot(&graph))
     }
 
     pub async fn shutdown(&mut self) -> anyhow::Result<()> {

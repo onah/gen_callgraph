@@ -1,9 +1,11 @@
 mod code_analysis;
+mod dot;
 mod lsp;
 use anyhow::anyhow;
 use code_analysis::CodeAnalyzer;
 use lsp::stdio_transport::StdioTransport;
 use std::env;
+use std::fs;
 use std::process::Stdio;
 use std::{thread, time};
 use tokio::io::BufReader;
@@ -11,17 +13,24 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let args: Vec<String> = env::args().collect();
+
     //let stdio = StdioTransport::spawn()?;
     let (_child, writer, reader) = start_rust_analyzer("rust-analyzer", &[])?;
     let stdio = StdioTransport::new(writer, reader);
 
     // Use the transport-based constructor so higher layers can provide transports.
-    let workspace = env::args().nth(1).map(|s| s).unwrap_or_else(|| {
+    let workspace = args.get(1).cloned().unwrap_or_else(|| {
         std::env::current_dir()
             .ok()
             .and_then(|p| p.to_str().map(|s| s.to_string()))
             .unwrap_or_else(|| String::from("."))
     });
+    let entry_function = args.get(2).cloned().unwrap_or_else(|| "main".to_string());
+    let output_path = args
+        .get(3)
+        .cloned()
+        .unwrap_or_else(|| "callgraph.dot".to_string());
 
     let lsp_client = lsp::LspClient::new(Box::new(stdio), workspace);
     let mut code_analyzer = CodeAnalyzer::new(lsp_client);
@@ -41,9 +50,15 @@ async fn main() -> anyhow::Result<()> {
             Err(e) => eprintln!("Function list Error: {:?}", e),
         }
 
-        match code_analyzer.print_call_order_from("main").await {
-            Ok(_) => println!("Call order Success"),
-            Err(e) => eprintln!("Call order Error: {:?}", e),
+        match code_analyzer.generate_call_graph_dot(&entry_function).await {
+            Ok(dot) => {
+                if let Err(e) = fs::write(&output_path, dot) {
+                    eprintln!("DOT write Error: {:?}", e);
+                } else {
+                    println!("DOT output Success: {}", output_path);
+                }
+            }
+            Err(e) => eprintln!("Call graph Error: {:?}", e),
         }
 
         //code_analyzer.get_main_function_location().await?;
