@@ -10,7 +10,8 @@ pub mod types;
 // Using `anyhow::Error` directly across the codebase; removed `DynError alias.
 use crate::lsp::framed::FramedTransport;
 use crate::lsp::types::Message;
-use lsp_types::SymbolKind;
+use lsp_types::{CallHierarchyItem, CallHierarchyOutgoingCall, SymbolKind, SymbolInformation};
+use std::collections::HashSet;
 use std::time::Duration;
 
 pub struct LspClient {
@@ -34,9 +35,7 @@ impl LspClient {
     }
 
     pub async fn initialize(&mut self) -> anyhow::Result<()> {
-        let request = self
-            .message_builder
-            .initialize(&self.workspace_root)?;
+        let request = self.message_builder.initialize(&self.workspace_root)?;
         // send request via framed transport and wait for response
         let id = self.communicator.send_request(request).await?;
         let _resp = self
@@ -84,6 +83,153 @@ impl LspClient {
             }
             Message::Notification(_notification) => {
                 // ignore notifications here
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn find_function_symbol(&mut self, query: &str) -> anyhow::Result<Option<SymbolInformation>> {
+        let request = self
+            .message_builder
+            .create_request("workspace/symbol", Some(serde_json::json!({"query": query})))?;
+
+        let id = self.communicator.send_request(request).await?;
+        let response = self
+            .communicator
+            .receive_response_with_timeout(id, Some(Duration::from_secs(10)))
+            .await?;
+
+        match response {
+            Message::Response(response) => {
+                let result = response
+                    .result
+                    .ok_or_else(|| anyhow::anyhow!("workspace/symbol response has no result"))?;
+                let symbols: Vec<SymbolInformation> = serde_json::from_value(result)?;
+
+                let exact = symbols
+                    .iter()
+                    .find(|s| s.kind == SymbolKind::FUNCTION && s.name == query)
+                    .cloned();
+                if exact.is_some() {
+                    return Ok(exact);
+                }
+
+                let partial = symbols
+                    .iter()
+                    .find(|s| s.kind == SymbolKind::FUNCTION)
+                    .cloned();
+                Ok(partial)
+            }
+            Message::Error(_) => Ok(None),
+            Message::Notification(_) => Ok(None),
+        }
+    }
+
+    async fn prepare_call_hierarchy(
+        &mut self,
+        symbol: &SymbolInformation,
+    ) -> anyhow::Result<Vec<CallHierarchyItem>> {
+        let params = serde_json::json!({
+            "textDocument": {
+                "uri": symbol.location.uri
+            },
+            "position": symbol.location.range.start
+        });
+
+        let request = self
+            .message_builder
+            .create_request("textDocument/prepareCallHierarchy", Some(params))?;
+
+        let id = self.communicator.send_request(request).await?;
+        let response = self
+            .communicator
+            .receive_response_with_timeout(id, Some(Duration::from_secs(10)))
+            .await?;
+
+        match response {
+            Message::Response(response) => {
+                let result = response
+                    .result
+                    .ok_or_else(|| anyhow::anyhow!("prepareCallHierarchy response has no result"))?;
+                let items: Vec<CallHierarchyItem> = serde_json::from_value(result)?;
+                Ok(items)
+            }
+            Message::Error(_) => Ok(vec![]),
+            Message::Notification(_) => Ok(vec![]),
+        }
+    }
+
+    async fn get_outgoing_calls(
+        &mut self,
+        item: &CallHierarchyItem,
+    ) -> anyhow::Result<Vec<CallHierarchyOutgoingCall>> {
+        let request = self
+            .message_builder
+            .create_request("callHierarchy/outgoingCalls", Some(serde_json::json!({"item": item})))?;
+
+        let id = self.communicator.send_request(request).await?;
+        let response = self
+            .communicator
+            .receive_response_with_timeout(id, Some(Duration::from_secs(10)))
+            .await?;
+
+        match response {
+            Message::Response(response) => {
+                if let Some(result) = response.result {
+                    let calls: Vec<CallHierarchyOutgoingCall> = serde_json::from_value(result)?;
+                    Ok(calls)
+                } else {
+                    Ok(vec![])
+                }
+            }
+            Message::Error(_) => Ok(vec![]),
+            Message::Notification(_) => Ok(vec![]),
+        }
+    }
+
+    fn call_item_key(item: &CallHierarchyItem) -> String {
+        format!(
+            "{}:{}:{}:{}",
+            item.uri,
+            item.selection_range.start.line,
+            item.selection_range.start.character,
+            item.name
+        )
+    }
+
+    pub async fn print_call_order_from(&mut self, entry: &str) -> anyhow::Result<()> {
+        let Some(symbol) = self.find_function_symbol(entry).await? else {
+            println!("Entry function not found: {}", entry);
+            return Ok(());
+        };
+
+        let roots = self.prepare_call_hierarchy(&symbol).await?;
+        if roots.is_empty() {
+            println!("No call hierarchy root found for: {}", entry);
+            return Ok(());
+        }
+
+        let mut visited = HashSet::new();
+        let mut stack: Vec<(CallHierarchyItem, usize)> =
+            roots.into_iter().rev().map(|item| (item, 0usize)).collect();
+
+        println!("Call order (DFS):");
+
+        while let Some((item, depth)) = stack.pop() {
+            let key = Self::call_item_key(&item);
+            if !visited.insert(key) {
+                continue;
+            }
+
+            let indent = "  ".repeat(depth);
+            println!("{}- {}", indent, item.name);
+
+            let outgoing = self.get_outgoing_calls(&item).await?;
+            let mut children: Vec<CallHierarchyItem> = outgoing.into_iter().map(|c| c.to).collect();
+            children.reverse();
+            for child in children {
+                stack.push((child, depth + 1));
             }
         }
 

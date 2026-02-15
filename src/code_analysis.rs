@@ -19,6 +19,11 @@ impl CodeAnalyzer {
         Ok(())
     }
 
+    pub async fn print_call_order_from(&mut self, entry: &str) -> anyhow::Result<()> {
+        self.client.print_call_order_from(entry).await?;
+        Ok(())
+    }
+
     pub async fn shutdown(&mut self) -> anyhow::Result<()> {
         self.client.shutdown().await?;
         Ok(())

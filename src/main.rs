@@ -3,11 +3,11 @@ mod lsp;
 use anyhow::anyhow;
 use code_analysis::CodeAnalyzer;
 use lsp::stdio_transport::StdioTransport;
+use std::env;
 use std::process::Stdio;
 use std::{thread, time};
 use tokio::io::BufReader;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use std::env;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -39,6 +39,11 @@ async fn main() -> anyhow::Result<()> {
         match code_analyzer.get_all_function_list().await {
             Ok(_) => println!("Function list Success"),
             Err(e) => eprintln!("Function list Error: {:?}", e),
+        }
+
+        match code_analyzer.print_call_order_from("main").await {
+            Ok(_) => println!("Call order Success"),
+            Err(e) => eprintln!("Call order Error: {:?}", e),
         }
 
         //code_analyzer.get_main_function_location().await?;

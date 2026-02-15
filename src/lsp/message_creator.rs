@@ -67,6 +67,9 @@ impl MessageBuilder {
                     ..Default::default()
                 }),
                 text_document: Some(TextDocumentClientCapabilities {
+                    call_hierarchy: Some(lsp_types::CallHierarchyClientCapabilities {
+                        dynamic_registration: Some(true),
+                    }),
                     document_symbol: Some(lsp_types::DocumentSymbolClientCapabilities {
                         dynamic_registration: Some(true),
                         symbol_kind: Some(SymbolKindCapability {
