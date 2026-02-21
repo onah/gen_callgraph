@@ -14,6 +14,7 @@ use lsp_types::{CallHierarchyItem, CallHierarchyOutgoingCall, SymbolInformation,
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tokio::time::sleep;
 
 #[derive(Debug, Clone)]
 pub struct CallGraphNode {
@@ -116,37 +117,15 @@ impl LspClient {
     }
 
     pub async fn get_all_function_list(&mut self) -> anyhow::Result<()> {
-        let request = self
-            .message_builder
-            .create_request("workspace/symbol", Some(serde_json::json!({"query": ""})))?;
+        let symbols = self.get_workspace_function_symbols().await?;
+        if symbols.is_empty() {
+            return Err(anyhow::anyhow!(
+                "workspace function symbols are not ready yet"
+            ));
+        }
 
-        // send request and wait for response
-        let id = self.communicator.send_request(request).await?;
-
-        let response = self
-            .communicator
-            .receive_response_with_timeout(id, Some(Duration::from_secs(10)))
-            .await?;
-
-        match response {
-            Message::Response(response) => {
-                let symbols: Vec<lsp_types::SymbolInformation> =
-                    serde_json::from_value(response.result.unwrap()).unwrap();
-
-                for symbol in symbols {
-                    match symbol.kind {
-                        SymbolKind::FUNCTION => println!("Function: {}", symbol.name),
-                        SymbolKind::STRUCT => println!("Struct: {}", symbol.name),
-                        _ => {}
-                    }
-                }
-            }
-            Message::Error(_response) => {
-                // handle error
-            }
-            Message::Notification(_notification) => {
-                // ignore notifications here
-            }
+        for symbol in symbols {
+            println!("Function: {}", symbol.name);
         }
 
         Ok(())
@@ -228,6 +207,25 @@ impl LspClient {
             Message::Error(_) => Ok(None),
             Message::Notification(_) => Ok(None),
         }
+    }
+
+    async fn find_function_symbol_with_retry(
+        &mut self,
+        query: &str,
+        max_attempts: usize,
+        interval: Duration,
+    ) -> anyhow::Result<Option<SymbolInformation>> {
+        for attempt in 1..=max_attempts {
+            if let Some(symbol) = self.find_function_symbol(query).await? {
+                return Ok(Some(symbol));
+            }
+
+            if attempt < max_attempts {
+                sleep(interval).await;
+            }
+        }
+
+        Ok(None)
     }
 
     async fn prepare_call_hierarchy(
@@ -547,11 +545,14 @@ impl LspClient {
     }
 
     pub async fn collect_call_graph_from(&mut self, entry: &str) -> anyhow::Result<CallGraph> {
-        let function_symbols = self.get_workspace_function_symbols().await?;
-
-        let Some(symbol) = self.find_function_symbol(entry).await? else {
+        let Some(symbol) = self
+            .find_function_symbol_with_retry(entry, 20, Duration::from_millis(500))
+            .await?
+        else {
             return Err(anyhow::anyhow!("entry function not found: {}", entry));
         };
+
+        let function_symbols = self.get_workspace_function_symbols().await?;
 
         let roots = self.prepare_call_hierarchy(&symbol).await?;
         if roots.is_empty() {
