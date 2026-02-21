@@ -23,7 +23,8 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
             Err(e) => eprintln!("Initialization Error: {:?}", e),
         };
 
-        match get_all_function_list_with_retry(&mut code_analyzer, 10, Duration::from_secs(1)).await {
+        match get_all_function_list_with_retry(&mut code_analyzer, 10, Duration::from_secs(1)).await
+        {
             Ok(_) => println!("Function list Success"),
             Err(e) => eprintln!("Function list Error: {:?}", e),
         }

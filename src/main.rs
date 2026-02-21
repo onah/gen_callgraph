@@ -1,6 +1,6 @@
 mod app;
-mod code_analysis;
 mod cli;
+mod code_analysis;
 mod dot;
 mod lsp;
 use cli::Cli;
