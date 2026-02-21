@@ -2,35 +2,49 @@ mod code_analysis;
 mod dot;
 mod lsp;
 use anyhow::anyhow;
+use clap::Parser;
 use code_analysis::CodeAnalyzer;
 use lsp::stdio_transport::StdioTransport;
-use std::env;
 use std::fs;
 use std::process::Stdio;
 use std::{thread, time};
 use tokio::io::BufReader;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
+#[derive(Parser, Debug)]
+#[command(name = "gen_callgraph")]
+#[command(about = "Generate call graph dot output via rust-analyzer", long_about = None)]
+struct Cli {
+    workspace: Option<String>,
+    #[arg(default_value = "main")]
+    entry_function: String,
+    #[arg(default_value = "callgraph.dot")]
+    output_path: String,
+}
+
+impl Cli {
+    fn workspace_or_current_dir(&self) -> String {
+        self.workspace.clone().unwrap_or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .and_then(|p| p.to_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| String::from("."))
+        })
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args: Vec<String> = env::args().collect();
+    let cli = Cli::parse();
 
     //let stdio = StdioTransport::spawn()?;
     let (_child, writer, reader) = start_rust_analyzer("rust-analyzer", &[])?;
     let stdio = StdioTransport::new(writer, reader);
 
     // Use the transport-based constructor so higher layers can provide transports.
-    let workspace = args.get(1).cloned().unwrap_or_else(|| {
-        std::env::current_dir()
-            .ok()
-            .and_then(|p| p.to_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| String::from("."))
-    });
-    let entry_function = args.get(2).cloned().unwrap_or_else(|| "main".to_string());
-    let output_path = args
-        .get(3)
-        .cloned()
-        .unwrap_or_else(|| "callgraph.dot".to_string());
+    let workspace = cli.workspace_or_current_dir();
+    let entry_function = cli.entry_function;
+    let output_path = cli.output_path;
 
     let lsp_client = lsp::LspClient::new(Box::new(stdio), workspace);
     let mut code_analyzer = CodeAnalyzer::new(lsp_client);
