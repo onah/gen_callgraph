@@ -14,7 +14,7 @@ pub struct Cli {
     workspace: Option<String>,
     #[arg(default_value = "main")]
     pub entry_function: String,
-    #[arg(default_value = "callgraph.dot")]
+    #[arg(default_value = "tmp/callgraph.dot")]
     pub output_path: String,
 }
 

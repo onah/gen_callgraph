@@ -1,4 +1,4 @@
-use crate::lsp::CallGraph;
+use crate::call_graph::{CallGraph, CallGraphNode};
 use std::collections::BTreeMap;
 
 fn escape_dot(value: &str) -> String {
@@ -13,7 +13,7 @@ pub fn to_dot(graph: &CallGraph) -> String {
     out.push_str("  rankdir=LR;\n");
     out.push_str("  compound=true;\n");
 
-    let mut grouped: BTreeMap<String, Vec<&crate::lsp::CallGraphNode>> = BTreeMap::new();
+    let mut grouped: BTreeMap<String, Vec<&CallGraphNode>> = BTreeMap::new();
     for node in &graph.nodes {
         grouped.entry(node.group.clone()).or_default().push(node);
     }

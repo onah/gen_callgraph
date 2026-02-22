@@ -1,4 +1,5 @@
 mod app;
+mod call_graph;
 mod cli;
 mod code_analysis;
 mod dot;
