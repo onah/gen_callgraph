@@ -10,7 +10,7 @@ pub mod types;
 // Using `anyhow::Error` directly across the codebase; removed `DynError alias.
 use crate::lsp::framed::FramedTransport;
 use crate::lsp::types::Message;
-use lsp_types::{CallHierarchyItem, CallHierarchyOutgoingCall, SymbolInformation, SymbolKind};
+use lsp_types::{CallHierarchyItem, CallHierarchyOutgoingCall, SymbolInformation};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -81,11 +81,10 @@ impl LspClient {
 
     pub async fn initialize(&mut self) -> anyhow::Result<()> {
         let request = self.message_builder.initialize(&self.workspace_root)?;
-        // send request via framed transport and wait for response
-        let id = self.communicator.send_request(request).await?;
+        // send request and wait for response
         let _resp = self
             .communicator
-            .receive_response_with_timeout(id, Some(Duration::from_secs(10)))
+            .request(request, Some(Duration::from_secs(10)))
             .await?;
 
         let initialized_notification = self.message_builder.initialized_notification()?;
@@ -97,32 +96,17 @@ impl LspClient {
         Ok(())
     }
 
-    pub async fn get_all_function_list(&mut self) -> anyhow::Result<()> {
-        let symbols = self.get_workspace_function_symbols().await?;
-        if symbols.is_empty() {
-            return Err(anyhow::anyhow!(
-                "workspace function symbols are not ready yet"
-            ));
-        }
-
-        for symbol in symbols {
-            println!("Function: {}", symbol.name);
-        }
-
-        Ok(())
-    }
-
-    pub(crate) async fn get_workspace_function_symbols(
+    pub(crate) async fn workspace_symbol(
         &mut self,
+        query: &str,
     ) -> anyhow::Result<Vec<SymbolInformation>> {
         let request = self
             .message_builder
-            .create_request("workspace/symbol", Some(serde_json::json!({"query": ""})))?;
+            .create_request("workspace/symbol", Some(serde_json::json!({"query": query})))?;
 
-        let id = self.communicator.send_request(request).await?;
         let response = self
             .communicator
-            .receive_response_with_timeout(id, Some(Duration::from_secs(10)))
+            .request(request, Some(Duration::from_secs(10)))
             .await?;
 
         match response {
@@ -131,68 +115,14 @@ impl LspClient {
                     .result
                     .ok_or_else(|| anyhow::anyhow!("workspace/symbol response has no result"))?;
                 let symbols: Vec<SymbolInformation> = serde_json::from_value(result)?;
-                Ok(symbols
-                    .into_iter()
-                    .filter(|s| {
-                        (s.kind == SymbolKind::FUNCTION || s.kind == SymbolKind::METHOD)
-                            && self.is_uri_in_workspace(&s.location.uri)
-                    })
-                    .collect())
+                Ok(symbols)
             }
             Message::Error(_) => Ok(vec![]),
             Message::Notification(_) => Ok(vec![]),
         }
     }
 
-    pub(crate) async fn find_function_symbol(
-        &mut self,
-        query: &str,
-    ) -> anyhow::Result<Option<SymbolInformation>> {
-        let request = self.message_builder.create_request(
-            "workspace/symbol",
-            Some(serde_json::json!({"query": query})),
-        )?;
-
-        let id = self.communicator.send_request(request).await?;
-        let response = self
-            .communicator
-            .receive_response_with_timeout(id, Some(Duration::from_secs(10)))
-            .await?;
-
-        match response {
-            Message::Response(response) => {
-                let result = response
-                    .result
-                    .ok_or_else(|| anyhow::anyhow!("workspace/symbol response has no result"))?;
-                let symbols: Vec<SymbolInformation> = serde_json::from_value(result)?;
-
-                let exact = symbols
-                    .iter()
-                    .find(|s| {
-                        (s.kind == SymbolKind::FUNCTION || s.kind == SymbolKind::METHOD)
-                            && s.name == query
-                            && self.is_uri_in_workspace(&s.location.uri)
-                    })
-                    .cloned();
-                if exact.is_some() {
-                    return Ok(exact);
-                }
-
-                let partial = symbols
-                    .iter()
-                    .find(|s| {
-                        (s.kind == SymbolKind::FUNCTION || s.kind == SymbolKind::METHOD)
-                            && self.is_uri_in_workspace(&s.location.uri)
-                    })
-                    .cloned();
-                Ok(partial)
-            }
-            Message::Error(_) => Ok(None),
-            Message::Notification(_) => Ok(None),
-        }
-    }
-
-    pub(crate) async fn prepare_call_hierarchy(
+    pub(crate) async fn text_document_prepare_call_hierarchy(
         &mut self,
         symbol: &SymbolInformation,
     ) -> anyhow::Result<Vec<CallHierarchyItem>> {
@@ -207,10 +137,9 @@ impl LspClient {
             .message_builder
             .create_request("textDocument/prepareCallHierarchy", Some(params))?;
 
-        let id = self.communicator.send_request(request).await?;
         let response = self
             .communicator
-            .receive_response_with_timeout(id, Some(Duration::from_secs(10)))
+            .request(request, Some(Duration::from_secs(10)))
             .await?;
 
         match response {
@@ -226,7 +155,7 @@ impl LspClient {
         }
     }
 
-    pub(crate) async fn get_outgoing_calls(
+    pub(crate) async fn call_hierarchy_outgoing_calls(
         &mut self,
         item: &CallHierarchyItem,
     ) -> anyhow::Result<Vec<CallHierarchyOutgoingCall>> {
@@ -235,10 +164,9 @@ impl LspClient {
             Some(serde_json::json!({"item": item})),
         )?;
 
-        let id = self.communicator.send_request(request).await?;
         let response = self
             .communicator
-            .receive_response_with_timeout(id, Some(Duration::from_secs(10)))
+            .request(request, Some(Duration::from_secs(10)))
             .await?;
 
         match response {
@@ -258,12 +186,9 @@ impl LspClient {
     pub async fn shutdown(&mut self) -> anyhow::Result<()> {
         let request = self.message_builder.create_request("shutdown", Some(""))?;
 
-        // send shutdown request and wait for response
-        let id = self.communicator.send_request(request).await?;
-
         let _response = self
             .communicator
-            .receive_response_with_timeout(id, Some(Duration::from_secs(10)))
+            .request(request, Some(Duration::from_secs(10)))
             .await?;
 
         let notification = self.message_builder.create_notification("exit", Some(""))?;

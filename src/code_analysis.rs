@@ -1,6 +1,6 @@
 use crate::call_graph::{CallGraph, CallGraphEdge, CallGraphNode};
 use crate::lsp;
-use lsp_types::{CallHierarchyItem, SymbolInformation};
+use lsp_types::{CallHierarchyItem, SymbolInformation, SymbolKind};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
@@ -27,7 +27,17 @@ impl CodeAnalyzer {
     }
 
     pub async fn get_all_function_list(&mut self) -> anyhow::Result<()> {
-        self.client.get_all_function_list().await?;
+        let symbols = self.workspace_function_symbols().await?;
+        if symbols.is_empty() {
+            return Err(anyhow::anyhow!(
+                "workspace function symbols are not ready yet"
+            ));
+        }
+
+        for symbol in symbols {
+            println!("Function: {}", symbol.name);
+        }
+
         Ok(())
     }
 
@@ -49,9 +59,9 @@ impl CodeAnalyzer {
             return Err(anyhow::anyhow!("entry function not found: {}", entry));
         };
 
-        let function_symbols = self.client.get_workspace_function_symbols().await?;
+        let function_symbols = self.workspace_function_symbols().await?;
 
-        let roots = self.client.prepare_call_hierarchy(&symbol).await?;
+        let roots = self.client.text_document_prepare_call_hierarchy(&symbol).await?;
         if roots.is_empty() {
             return Err(anyhow::anyhow!(
                 "no call hierarchy root found for: {}",
@@ -80,7 +90,7 @@ impl CodeAnalyzer {
                 continue;
             }
 
-            let outgoing = self.client.get_outgoing_calls(&item).await?;
+            let outgoing = self.client.call_hierarchy_outgoing_calls(&item).await?;
 
             for call in outgoing {
                 let child = call.to;
@@ -121,7 +131,7 @@ impl CodeAnalyzer {
         interval: Duration,
     ) -> anyhow::Result<Option<SymbolInformation>> {
         for attempt in 1..=max_attempts {
-            if let Some(symbol) = self.client.find_function_symbol(query).await? {
+            if let Some(symbol) = self.find_function_symbol(query).await? {
                 return Ok(Some(symbol));
             }
 
@@ -131,6 +141,42 @@ impl CodeAnalyzer {
         }
 
         Ok(None)
+    }
+
+    async fn workspace_function_symbols(&mut self) -> anyhow::Result<Vec<SymbolInformation>> {
+        let symbols = self.client.workspace_symbol("").await?;
+        Ok(symbols
+            .into_iter()
+            .filter(|s| {
+                (s.kind == SymbolKind::FUNCTION || s.kind == SymbolKind::METHOD)
+                    && self.client.is_uri_in_workspace(&s.location.uri)
+            })
+            .collect())
+    }
+
+    async fn find_function_symbol(&mut self, query: &str) -> anyhow::Result<Option<SymbolInformation>> {
+        let symbols = self.client.workspace_symbol(query).await?;
+
+        let exact = symbols
+            .iter()
+            .find(|s| {
+                (s.kind == SymbolKind::FUNCTION || s.kind == SymbolKind::METHOD)
+                    && s.name == query
+                    && self.client.is_uri_in_workspace(&s.location.uri)
+            })
+            .cloned();
+        if exact.is_some() {
+            return Ok(exact);
+        }
+
+        let partial = symbols
+            .iter()
+            .find(|s| {
+                (s.kind == SymbolKind::FUNCTION || s.kind == SymbolKind::METHOD)
+                    && self.client.is_uri_in_workspace(&s.location.uri)
+            })
+            .cloned();
+        Ok(partial)
     }
 
     fn call_item_key(item: &CallHierarchyItem) -> String {

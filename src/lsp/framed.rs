@@ -10,6 +10,17 @@ pub trait FramedTransport: Send + Sync {
     // `receive_response_with_timeout` by passing the id.
     async fn send_request(&mut self, request: Request) -> anyhow::Result<i32>;
 
+    // Convenience API: send request and wait for the corresponding response.
+    // This keeps backward compatibility while offering a simpler call style.
+    async fn request(
+        &mut self,
+        request: Request,
+        timeout: Option<std::time::Duration>,
+    ) -> anyhow::Result<Message> {
+        let id = self.send_request(request).await?;
+        self.receive_response_with_timeout(id, timeout).await
+    }
+
     // - `send_notification` sends a notification message (no response expected).
     async fn send_notification(&mut self, notification: Notification) -> anyhow::Result<()>;
 
