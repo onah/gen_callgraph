@@ -22,101 +22,145 @@ pub struct FramedBox {
     pending_senders: Arc<Mutex<HashMap<i32, oneshot::Sender<Message>>>>,
     // receiver map is used by callers to await responses
     pending_receivers: Arc<Mutex<HashMap<i32, oneshot::Receiver<Message>>>>,
+    // server-to-client notifications queued by the background task
+    notification_rx: Mutex<mpsc::Receiver<Notification>>,
+}
+
+/// Background I/O task owned by `FramedBox`.
+///
+/// Runs a `tokio::select!` loop that concurrently:
+/// - takes outgoing messages from the channel and writes them to the transport, and
+/// - reads incoming messages from the transport and delivers them to waiting callers.
+///
+/// When the loop exits (either because all `FramedBox` handles are dropped or because
+/// a fatal read error occurs), any callers still waiting for a response are failed
+/// immediately by draining `pending_senders`.
+struct IoTask {
+    outgoing_rx: mpsc::Receiver<Outgoing>,
+    pending_senders: Arc<Mutex<HashMap<i32, oneshot::Sender<Message>>>>,
+    notification_tx: mpsc::Sender<Notification>,
+    transport: Box<dyn LspTransport + Send + Sync>,
+}
+
+impl IoTask {
+    async fn run(mut self) {
+        loop {
+            tokio::select! {
+                opt = self.outgoing_rx.recv() => {
+                    match opt {
+                        Some(msg) => {
+                            if let Err(e) = self.send_outgoing(msg).await {
+                                eprintln!("transport write error: {}", e);
+                            }
+                        }
+                        None => break, // all FramedBox handles dropped; clean shutdown
+                    }
+                }
+                read_result = self.transport.read() => {
+                    match read_result {
+                        Ok(buf) => self.dispatch_incoming(buf).await,
+                        Err(e) => {
+                            eprintln!("transport read error: {}", e);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        // Fail any requests that are still waiting for a response so that callers
+        // see a channel-close error instead of hanging until their timeout fires.
+        self.drain_pending_senders().await;
+    }
+
+    /// Serialize and write one outgoing message to the transport.
+    ///
+    /// On failure (serialization or write), removes the corresponding pending sender
+    /// so the caller's `receive_response_with_timeout` sees a channel-close error
+    /// promptly rather than waiting until the timeout expires.
+    async fn send_outgoing(&mut self, msg: Outgoing) -> anyhow::Result<()> {
+        let maybe_request_id = match &msg {
+            Outgoing::Request(r) => Some(r.id),
+            Outgoing::Notification(_) => None,
+        };
+        let write_result = match &msg {
+            Outgoing::Request(r) => match serde_json::to_vec(r) {
+                Ok(bytes) => self.transport.write(&bytes).await,
+                Err(e) => Err(e.into()),
+            },
+            Outgoing::Notification(n) => match serde_json::to_vec(n) {
+                Ok(bytes) => self.transport.write(&bytes).await,
+                Err(e) => Err(e.into()),
+            },
+        };
+        if let Err(e) = write_result {
+            if let Some(id) = maybe_request_id {
+                // Drop the sender so the caller's receiver wakes up with RecvError.
+                self.pending_senders.lock().await.remove(&id);
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// Parse and route one incoming payload to the appropriate pending receiver.
+    async fn dispatch_incoming(&self, buf: Vec<u8>) {
+        let message = match parse_message_from_slice(&buf) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("parse message error: {}", e);
+                return;
+            }
+        };
+        match message {
+            Message::Response(resp) => self.resolve_pending(resp.id, Message::Response(resp)).await,
+            Message::Error(err) => self.resolve_pending(err.id, Message::Error(err)).await,
+            Message::Notification(note) => {
+                // If the receiver has been dropped or the buffer is full, discard.
+                let _ = self.notification_tx.try_send(note);
+            }
+        }
+    }
+
+    /// Deliver `msg` to the oneshot channel registered for `id`.
+    async fn resolve_pending(&self, id: i32, msg: Message) {
+        let mut senders = self.pending_senders.lock().await;
+        if let Some(tx) = senders.remove(&id) {
+            let _ = tx.send(msg);
+        } else {
+            eprintln!("no pending sender for id={}", id);
+        }
+    }
+
+    /// Drop all pending senders so that every waiting `receive_response_with_timeout`
+    /// wakes up with a channel-close error instead of hanging until its timeout fires.
+    async fn drain_pending_senders(&self) {
+        self.pending_senders.lock().await.clear();
+    }
 }
 
 impl FramedBox {
     pub fn new(transport: Box<dyn LspTransport + Send + Sync + 'static>) -> Self {
-        let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<Outgoing>(32);
-        let (notification_tx, _notification_rx) = mpsc::channel::<Notification>(32);
+        let (outgoing_tx, outgoing_rx) = mpsc::channel::<Outgoing>(32);
+        let (notification_tx, notification_rx) = mpsc::channel::<Notification>(64);
 
         let pending_senders: Arc<Mutex<HashMap<i32, oneshot::Sender<Message>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let pending_receivers: Arc<Mutex<HashMap<i32, oneshot::Receiver<Message>>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
-        // Clone for background task
-        let pending_senders_bg = pending_senders.clone();
-
-        tokio::spawn(async move {
-            let mut transport = transport;
-
-            loop {
-                tokio::select! {
-                    // Outgoing message to send
-                    opt = outgoing_rx.recv() => {
-                        match opt {
-                            Some(msg) => {
-                                let bytes = match &msg {
-                                    Outgoing::Request(r) => match serde_json::to_vec(r) {
-                                        Ok(b) => b,
-                                        Err(e) => { eprintln!("serialize request: {}", e); continue; }
-                                    },
-                                    Outgoing::Notification(n) => match serde_json::to_vec(n) {
-                                        Ok(b) => b,
-                                        Err(e) => { eprintln!("serialize notification: {}", e); continue; }
-                                    }
-                                };
-                                if let Err(e) = transport.write(&bytes).await {
-                                    eprintln!("transport write error: {}", e);
-                                }
-                            }
-                            None => {
-                                // sender dropped; exit loop
-                                break;
-                            }
-                        }
-                    }
-                    // Incoming message from transport
-                    read_res = transport.read() => {
-                        match read_res {
-                            Ok(buf) => {
-                                match parse_message_from_slice(&buf) {
-                                    Ok(message) => {
-                                        match message {
-                                            Message::Response(resp) => {
-                                                let id = resp.id;
-                                                let mut senders = pending_senders_bg.lock().await;
-                                                if let Some(tx) = senders.remove(&id) {
-                                                    let _ = tx.send(Message::Response(resp));
-                                                } else {
-                                                    eprintln!("no pending sender for id={}", id);
-                                                }
-                                            }
-                                            Message::Error(err) => {
-                                                let id = err.id;
-                                                let mut senders = pending_senders_bg.lock().await;
-                                                if let Some(tx) = senders.remove(&id) {
-                                                    let _ = tx.send(Message::Error(err));
-                                                } else {
-                                                    eprintln!("no pending sender for id={}", id);
-                                                }
-                                            }
-                                            Message::Notification(note) => {
-                                                if let Err(e) = notification_tx.send(note).await {
-                                                    eprintln!("notification channel closed: {}", e);
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        eprintln!("parse message error: {}", e);
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("transport read error: {}", e);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        });
+        let task = IoTask {
+            outgoing_rx,
+            pending_senders: pending_senders.clone(),
+            notification_tx,
+            transport,
+        };
+        tokio::spawn(task.run());
 
         FramedBox {
             outgoing_tx,
             pending_senders,
             pending_receivers,
+            notification_rx: Mutex::new(notification_rx),
         }
     }
 }
@@ -137,7 +181,12 @@ impl FramedTransport for FramedBox {
             receivers.insert(id, rx);
         }
 
-        self.outgoing_tx.send(Outgoing::Request(request)).await?;
+        if let Err(e) = self.outgoing_tx.send(Outgoing::Request(request)).await {
+            // Channel closed; clean up stale entries to avoid memory leaks.
+            self.pending_senders.lock().await.remove(&id);
+            self.pending_receivers.lock().await.remove(&id);
+            return Err(anyhow::anyhow!("outgoing channel closed: {}", e));
+        }
 
         Ok(id)
     }
@@ -178,6 +227,28 @@ impl FramedTransport for FramedBox {
             }
         } else {
             Err(anyhow::anyhow!("no pending receiver for id"))
+        }
+    }
+
+    async fn receive_notification(
+        &mut self,
+        timeout: Option<Duration>,
+    ) -> anyhow::Result<Notification> {
+        let mut rx = self.notification_rx.lock().await;
+        match timeout {
+            Some(dur) => match tokio::time::timeout(dur, rx.recv()).await {
+                Ok(Some(note)) => Ok(note),
+                Ok(None) => Err(anyhow::anyhow!("notification channel closed")),
+                Err(_) => Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "notification receive timeout",
+                )
+                .into()),
+            },
+            None => rx
+                .recv()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("notification channel closed")),
         }
     }
 }

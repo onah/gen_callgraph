@@ -9,7 +9,7 @@ pub mod types;
 /// Common boxed error type for LSP module boundaries.
 // Using `anyhow::Error` directly across the codebase; removed `DynError alias.
 use crate::lsp::framed::FramedTransport;
-use crate::lsp::types::Message;
+use crate::lsp::types::{Message, Notification};
 use lsp_types::{CallHierarchyItem, CallHierarchyOutgoingCall, SymbolInformation};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -182,6 +182,17 @@ impl LspClient {
             Message::Error(_) => Ok(vec![]),
             Message::Notification(_) => Ok(vec![]),
         }
+    }
+
+    /// Wait for the next server-to-client notification.
+    ///
+    /// Pass `Some(duration)` to limit the wait; `None` blocks until a
+    /// notification arrives or the transport is closed.
+    pub async fn receive_notification(
+        &mut self,
+        timeout: Option<Duration>,
+    ) -> anyhow::Result<Notification> {
+        self.communicator.receive_notification(timeout).await
     }
 
     pub async fn shutdown(&mut self) -> anyhow::Result<()> {

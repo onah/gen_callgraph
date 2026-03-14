@@ -31,4 +31,11 @@ pub trait FramedTransport: Send + Sync {
         id: i32,
         timeout: Option<std::time::Duration>,
     ) -> anyhow::Result<Message>;
+
+    // - `receive_notification` waits for the next server-to-client notification.
+    //   If `timeout` is `Some(duration)` and the wait exceeds it, return an error.
+    async fn receive_notification(
+        &mut self,
+        timeout: Option<std::time::Duration>,
+    ) -> anyhow::Result<Notification>;
 }
