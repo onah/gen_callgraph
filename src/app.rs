@@ -5,8 +5,8 @@ use tokio::io::BufReader;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::time::{sleep, Duration};
 
+use crate::call_graph_builder::CodeAnalyzer;
 use crate::cli::Config;
-use crate::code_analysis::CodeAnalyzer;
 use crate::lsp;
 use crate::lsp::stdio_transport::StdioTransport;
 
