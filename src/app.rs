@@ -30,10 +30,11 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         }
 
         match code_analyzer
-            .generate_call_graph_dot(&config.entry_function)
+            .generate_call_graph(&config.entry_function)
             .await
         {
-            Ok(dot) => {
+            Ok(graph) => {
+                let dot = crate::dot_renderer::to_dot(&graph);
                 if let Err(e) = fs::write(&config.output_path, dot) {
                     eprintln!("DOT write Error: {:?}", e);
                 } else {

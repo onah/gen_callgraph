@@ -2,7 +2,7 @@ mod app;
 mod call_graph;
 mod cli;
 mod code_analysis;
-mod dot;
+mod dot_renderer;
 mod lsp;
 use cli::Cli;
 

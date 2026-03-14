@@ -41,9 +41,8 @@ impl CodeAnalyzer {
         Ok(())
     }
 
-    pub async fn generate_call_graph_dot(&mut self, entry: &str) -> anyhow::Result<String> {
-        let graph = self.collect_call_graph_from(entry).await?;
-        Ok(crate::dot::to_dot(&graph))
+    pub async fn generate_call_graph(&mut self, entry: &str) -> anyhow::Result<CallGraph> {
+        self.collect_call_graph_from(entry).await
     }
 
     pub async fn shutdown(&mut self) -> anyhow::Result<()> {
@@ -61,7 +60,10 @@ impl CodeAnalyzer {
 
         let function_symbols = self.workspace_function_symbols().await?;
 
-        let roots = self.client.text_document_prepare_call_hierarchy(&symbol).await?;
+        let roots = self
+            .client
+            .text_document_prepare_call_hierarchy(&symbol)
+            .await?;
         if roots.is_empty() {
             return Err(anyhow::anyhow!(
                 "no call hierarchy root found for: {}",
@@ -154,7 +156,10 @@ impl CodeAnalyzer {
             .collect())
     }
 
-    async fn find_function_symbol(&mut self, query: &str) -> anyhow::Result<Option<SymbolInformation>> {
+    async fn find_function_symbol(
+        &mut self,
+        query: &str,
+    ) -> anyhow::Result<Option<SymbolInformation>> {
         let symbols = self.client.workspace_symbol(query).await?;
 
         let exact = symbols

@@ -100,9 +100,10 @@ impl LspClient {
         &mut self,
         query: &str,
     ) -> anyhow::Result<Vec<SymbolInformation>> {
-        let request = self
-            .message_builder
-            .create_request("workspace/symbol", Some(serde_json::json!({"query": query})))?;
+        let request = self.message_builder.create_request(
+            "workspace/symbol",
+            Some(serde_json::json!({"query": query})),
+        )?;
 
         let response = self
             .communicator
