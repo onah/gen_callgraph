@@ -23,6 +23,10 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
             Err(e) => eprintln!("Initialization Error: {:?}", e),
         };
 
+        let _ = code_analyzer
+            .wait_notification(Some(Duration::from_millis(1)))
+            .await;
+
         match get_all_function_list_with_retry(&mut code_analyzer, 10, Duration::from_secs(1)).await
         {
             Ok(_) => println!("Function list Success"),

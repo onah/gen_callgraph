@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, Mutex};
 
-enum Outgoing {
+enum ClientOutgoing {
     Request(Request),
     Notification(Notification),
 }
@@ -17,7 +17,7 @@ enum Outgoing {
 /// owning the `LspTransport`. It supports concurrent requests by
 /// registering pending oneshot channels keyed by request id.
 pub struct FramedBox {
-    outgoing_tx: mpsc::Sender<Outgoing>,
+    outgoing_tx: mpsc::Sender<ClientOutgoing>,
     // sender map is used by the background task to resolve responses
     pending_senders: Arc<Mutex<HashMap<i32, oneshot::Sender<Message>>>>,
     // receiver map is used by callers to await responses
@@ -36,7 +36,7 @@ pub struct FramedBox {
 /// a fatal read error occurs), any callers still waiting for a response are failed
 /// immediately by draining `pending_senders`.
 struct IoTask {
-    outgoing_rx: mpsc::Receiver<Outgoing>,
+    outgoing_rx: mpsc::Receiver<ClientOutgoing>,
     pending_senders: Arc<Mutex<HashMap<i32, oneshot::Sender<Message>>>>,
     notification_tx: mpsc::Sender<Notification>,
     transport: Box<dyn LspTransport + Send + Sync>,
@@ -75,19 +75,19 @@ impl IoTask {
     /// Serialize and write one outgoing message to the transport.
     ///
     /// On failure (serialization or write), removes the corresponding pending sender
-    /// so the caller's `receive_response_with_timeout` sees a channel-close error
+    /// so the caller's `wait_response` sees a channel-close error
     /// promptly rather than waiting until the timeout expires.
-    async fn send_outgoing(&mut self, msg: Outgoing) -> anyhow::Result<()> {
+    async fn send_outgoing(&mut self, msg: ClientOutgoing) -> anyhow::Result<()> {
         let maybe_request_id = match &msg {
-            Outgoing::Request(r) => Some(r.id),
-            Outgoing::Notification(_) => None,
+            ClientOutgoing::Request(r) => Some(r.id),
+            ClientOutgoing::Notification(_) => None,
         };
         let write_result = match &msg {
-            Outgoing::Request(r) => match serde_json::to_vec(r) {
+            ClientOutgoing::Request(r) => match serde_json::to_vec(r) {
                 Ok(bytes) => self.transport.write(&bytes).await,
                 Err(e) => Err(e.into()),
             },
-            Outgoing::Notification(n) => match serde_json::to_vec(n) {
+            ClientOutgoing::Notification(n) => match serde_json::to_vec(n) {
                 Ok(bytes) => self.transport.write(&bytes).await,
                 Err(e) => Err(e.into()),
             },
@@ -131,7 +131,7 @@ impl IoTask {
         }
     }
 
-    /// Drop all pending senders so that every waiting `receive_response_with_timeout`
+    /// Drop all pending senders so that every waiting `wait_response`
     /// wakes up with a channel-close error instead of hanging until its timeout fires.
     async fn drain_pending_senders(&self) {
         self.pending_senders.lock().await.clear();
@@ -140,7 +140,7 @@ impl IoTask {
 
 impl FramedBox {
     pub fn new(transport: Box<dyn LspTransport + Send + Sync + 'static>) -> Self {
-        let (outgoing_tx, outgoing_rx) = mpsc::channel::<Outgoing>(32);
+        let (outgoing_tx, outgoing_rx) = mpsc::channel::<ClientOutgoing>(32);
         let (notification_tx, notification_rx) = mpsc::channel::<Notification>(64);
 
         let pending_senders: Arc<Mutex<HashMap<i32, oneshot::Sender<Message>>>> =
@@ -181,7 +181,11 @@ impl FramedTransport for FramedBox {
             receivers.insert(id, rx);
         }
 
-        if let Err(e) = self.outgoing_tx.send(Outgoing::Request(request)).await {
+        if let Err(e) = self
+            .outgoing_tx
+            .send(ClientOutgoing::Request(request))
+            .await
+        {
             // Channel closed; clean up stale entries to avoid memory leaks.
             self.pending_senders.lock().await.remove(&id);
             self.pending_receivers.lock().await.remove(&id);
@@ -193,12 +197,12 @@ impl FramedTransport for FramedBox {
 
     async fn send_notification(&mut self, notification: Notification) -> anyhow::Result<()> {
         self.outgoing_tx
-            .send(Outgoing::Notification(notification))
+            .send(ClientOutgoing::Notification(notification))
             .await?;
         Ok(())
     }
 
-    async fn receive_response_with_timeout(
+    async fn wait_response(
         &mut self,
         id: i32,
         timeout: Option<Duration>,
@@ -230,7 +234,7 @@ impl FramedTransport for FramedBox {
         }
     }
 
-    async fn receive_notification(
+    async fn wait_notification(
         &mut self,
         timeout: Option<Duration>,
     ) -> anyhow::Result<Notification> {
@@ -320,7 +324,7 @@ mod tests {
         let id = client.send_request(req).await?;
 
         let msg = client
-            .receive_response_with_timeout(id, Some(std::time::Duration::from_secs(1)))
+            .wait_response(id, Some(std::time::Duration::from_secs(1)))
             .await?;
         match msg {
             LspMessage::Response(r) => {

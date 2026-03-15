@@ -2,6 +2,7 @@ use crate::call_graph::meta_resolver;
 use crate::call_graph::symbol_locator;
 use crate::call_graph::{CallGraph, CallGraphEdge, CallGraphNode};
 use crate::lsp;
+use crate::lsp::types::Notification;
 use lsp_types::CallHierarchyItem;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -42,6 +43,13 @@ impl CodeAnalyzer {
     pub async fn shutdown(&mut self) -> anyhow::Result<()> {
         self.client.shutdown().await?;
         Ok(())
+    }
+
+    pub async fn wait_notification(
+        &mut self,
+        timeout: Option<Duration>,
+    ) -> anyhow::Result<Notification> {
+        self.client.wait_notification(timeout).await
     }
 
     async fn collect_call_graph_from(&mut self, entry: &str) -> anyhow::Result<CallGraph> {

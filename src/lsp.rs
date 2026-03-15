@@ -84,7 +84,7 @@ impl LspClient {
         // send request and wait for response
         let _resp = self
             .communicator
-            .request(request, Some(Duration::from_secs(10)))
+            .send_and_wait(request, Some(Duration::from_secs(10)))
             .await?;
 
         let initialized_notification = self.message_builder.initialized_notification()?;
@@ -107,7 +107,7 @@ impl LspClient {
 
         let response = self
             .communicator
-            .request(request, Some(Duration::from_secs(10)))
+            .send_and_wait(request, Some(Duration::from_secs(10)))
             .await?;
 
         match response {
@@ -140,7 +140,7 @@ impl LspClient {
 
         let response = self
             .communicator
-            .request(request, Some(Duration::from_secs(10)))
+            .send_and_wait(request, Some(Duration::from_secs(10)))
             .await?;
 
         match response {
@@ -167,7 +167,7 @@ impl LspClient {
 
         let response = self
             .communicator
-            .request(request, Some(Duration::from_secs(10)))
+            .send_and_wait(request, Some(Duration::from_secs(10)))
             .await?;
 
         match response {
@@ -188,11 +188,11 @@ impl LspClient {
     ///
     /// Pass `Some(duration)` to limit the wait; `None` blocks until a
     /// notification arrives or the transport is closed.
-    pub async fn receive_notification(
+    pub async fn wait_notification(
         &mut self,
         timeout: Option<Duration>,
     ) -> anyhow::Result<Notification> {
-        self.communicator.receive_notification(timeout).await
+        self.communicator.wait_notification(timeout).await
     }
 
     pub async fn shutdown(&mut self) -> anyhow::Result<()> {
@@ -200,7 +200,7 @@ impl LspClient {
 
         let _response = self
             .communicator
-            .request(request, Some(Duration::from_secs(10)))
+            .send_and_wait(request, Some(Duration::from_secs(10)))
             .await?;
 
         let notification = self.message_builder.create_notification("exit", Some(""))?;
