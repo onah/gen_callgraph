@@ -3,14 +3,23 @@ use std::fs;
 use std::process::Stdio;
 use tokio::io::BufReader;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::time::{sleep, Duration};
+use tokio::time::Duration;
 
 use crate::call_graph_builder::CodeAnalyzer;
 use crate::cli::Config;
 use crate::lsp;
 use crate::lsp::stdio_transport::StdioTransport;
+use crate::trace;
 
 pub async fn run(config: Config) -> anyhow::Result<()> {
+    trace::log(
+        "app",
+        "run-start",
+        &format!(
+            "workspace={} entry={} output={}",
+            config.workspace, config.entry_function, config.output_path
+        ),
+    );
     let (_child, writer, reader) = start_rust_analyzer("rust-analyzer", &[])?;
     let stdio = StdioTransport::new(writer, reader);
 
@@ -26,12 +35,6 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         let _ = code_analyzer
             .wait_notification(Some(Duration::from_millis(1)))
             .await;
-
-        match get_all_function_list_with_retry(&mut code_analyzer, 10, Duration::from_secs(1)).await
-        {
-            Ok(_) => println!("Function list Success"),
-            Err(e) => eprintln!("Function list Error: {:?}", e),
-        }
 
         match code_analyzer
             .generate_call_graph(&config.entry_function)
@@ -57,28 +60,6 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     }
 
     Ok(())
-}
-
-async fn get_all_function_list_with_retry(
-    code_analyzer: &mut CodeAnalyzer,
-    max_attempts: usize,
-    interval: Duration,
-) -> anyhow::Result<()> {
-    for attempt in 1..=max_attempts {
-        match code_analyzer.get_all_function_list().await {
-            Ok(()) => return Ok(()),
-            Err(e) if attempt < max_attempts => {
-                eprintln!(
-                    "Function list attempt {}/{} failed: {:?}. Retrying...",
-                    attempt, max_attempts, e
-                );
-                sleep(interval).await;
-            }
-            Err(e) => return Err(e),
-        }
-    }
-
-    unreachable!()
 }
 
 fn start_rust_analyzer(

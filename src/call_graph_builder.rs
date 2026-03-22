@@ -21,21 +21,6 @@ impl CodeAnalyzer {
         Ok(())
     }
 
-    pub async fn get_all_function_list(&mut self) -> anyhow::Result<()> {
-        let symbols = symbol_locator::workspace_function_symbols(&mut self.client).await?;
-        if symbols.is_empty() {
-            return Err(anyhow::anyhow!(
-                "workspace function symbols are not ready yet"
-            ));
-        }
-
-        for symbol in symbols {
-            println!("Function: {}", symbol.name);
-        }
-
-        Ok(())
-    }
-
     pub async fn generate_call_graph(&mut self, entry: &str) -> anyhow::Result<CallGraph> {
         self.collect_call_graph_from(entry).await
     }

@@ -4,6 +4,7 @@ mod call_graph_builder;
 mod cli;
 mod dot_renderer;
 mod lsp;
+mod trace;
 use cli::Cli;
 
 #[tokio::main]

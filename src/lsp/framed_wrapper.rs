@@ -1,7 +1,8 @@
 use crate::lsp::framed::FramedTransport;
-use crate::lsp::message_parser::parse_message_from_slice;
+use crate::lsp::message_parser::{parse_message_from_slice, parse_server_request_from_slice};
 use crate::lsp::transport::LspTransport;
 use crate::lsp::types::{Message, Notification, Request};
+use crate::trace;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -103,7 +104,26 @@ impl IoTask {
     }
 
     /// Parse and route one incoming payload to the appropriate pending receiver.
-    async fn dispatch_incoming(&self, buf: Vec<u8>) {
+    async fn dispatch_incoming(&mut self, buf: Vec<u8>) {
+        match parse_server_request_from_slice(&buf) {
+            Ok(Some((id, method))) => {
+                trace::log(
+                    "framed-wrapper",
+                    "server-request",
+                    &format!("id={} method={}", id, method),
+                );
+                if let Err(e) = self.respond_to_server_request(id, &method, &buf).await {
+                    eprintln!("transport write error: {}", e);
+                }
+                return;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!("parse server request error: {}", e);
+                return;
+            }
+        }
+
         let message = match parse_message_from_slice(&buf) {
             Ok(m) => m,
             Err(e) => {
@@ -116,9 +136,91 @@ impl IoTask {
             Message::Error(err) => self.resolve_pending(err.id, Message::Error(err)).await,
             Message::Notification(note) => {
                 // If the receiver has been dropped or the buffer is full, discard.
-                let _ = self.notification_tx.try_send(note);
+                if self.notification_tx.try_send(note).is_err() {
+                    trace::log(
+                        "framed-wrapper",
+                        "notification-drop",
+                        "notification queue full or receiver closed",
+                    );
+                }
             }
         }
+    }
+
+    async fn respond_to_server_request(
+        &mut self,
+        id: i32,
+        method: &str,
+        raw_buf: &[u8],
+    ) -> anyhow::Result<()> {
+        match method {
+            "client/registerCapability"
+            | "client/unregisterCapability"
+            | "window/workDoneProgress/create"
+            | "window/showDocument" => {
+                trace::log(
+                    "framed-wrapper",
+                    "server-request-response",
+                    &format!("id={} method={} result=null", id, method),
+                );
+                self.send_server_request_result(id, serde_json::Value::Null)
+                    .await
+            }
+            "workspace/configuration" => {
+                let result = Self::workspace_configuration_result(raw_buf)?;
+                trace::log(
+                    "framed-wrapper",
+                    "server-request-response",
+                    &format!("id={} method={} result=array", id, method),
+                );
+                self.send_server_request_result(id, result).await
+            }
+            _ => self.send_method_not_found(id, method).await,
+        }
+    }
+
+    fn workspace_configuration_result(raw_buf: &[u8]) -> anyhow::Result<serde_json::Value> {
+        let json: serde_json::Value = serde_json::from_slice(raw_buf)?;
+        let items_len = json
+            .get("params")
+            .and_then(|params| params.get("items"))
+            .and_then(|items| items.as_array())
+            .map(|items| items.len())
+            .unwrap_or(0);
+        let items = vec![serde_json::Value::Null; items_len];
+        Ok(serde_json::Value::Array(items))
+    }
+
+    async fn send_server_request_result(
+        &mut self,
+        id: i32,
+        result: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result
+        });
+        let bytes = serde_json::to_vec(&response)?;
+        self.transport.write(&bytes).await
+    }
+
+    async fn send_method_not_found(&mut self, id: i32, method: &str) -> anyhow::Result<()> {
+        trace::log(
+            "framed-wrapper",
+            "server-request-response",
+            &format!("id={} method={} error=-32601", id, method),
+        );
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {
+                "code": -32601,
+                "message": format!("Method not found: {}", method)
+            }
+        });
+        let bytes = serde_json::to_vec(&response)?;
+        self.transport.write(&bytes).await
     }
 
     /// Deliver `msg` to the oneshot channel registered for `id`.
@@ -333,6 +435,82 @@ mod tests {
             }
             _ => panic!("expected response"),
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn server_request_gets_method_not_found_response() -> Result<()> {
+        let (to_server_tx, mut to_server_rx) = mpsc::channel::<Vec<u8>>(8);
+        let (to_client_tx, to_client_rx) = mpsc::channel::<Vec<u8>>(8);
+
+        let transport = MockTransport {
+            write_tx: to_server_tx,
+            read_rx: Arc::new(Mutex::new(to_client_rx)),
+        };
+
+        let _client = FramedBox::new(Box::new(transport));
+
+        let server_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "unknown/customMethod",
+            "params": {}
+        });
+        to_client_tx
+            .send(serde_json::to_vec(&server_request)?)
+            .await
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        let written = tokio::time::timeout(std::time::Duration::from_secs(1), to_server_rx.recv())
+            .await
+            .map_err(|_| anyhow::anyhow!("timeout waiting for method-not-found response"))?
+            .ok_or_else(|| anyhow::anyhow!("client write channel closed"))?;
+
+        let json: serde_json::Value = serde_json::from_slice(&written)?;
+        assert_eq!(json.get("id").and_then(|v| v.as_i64()), Some(7));
+        assert_eq!(
+            json.get("error")
+                .and_then(|e| e.get("code"))
+                .and_then(|v| v.as_i64()),
+            Some(-32601)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn register_capability_gets_success_response() -> Result<()> {
+        let (to_server_tx, mut to_server_rx) = mpsc::channel::<Vec<u8>>(8);
+        let (to_client_tx, to_client_rx) = mpsc::channel::<Vec<u8>>(8);
+
+        let transport = MockTransport {
+            write_tx: to_server_tx,
+            read_rx: Arc::new(Mutex::new(to_client_rx)),
+        };
+
+        let _client = FramedBox::new(Box::new(transport));
+
+        let server_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "client/registerCapability",
+            "params": {"registrations": []}
+        });
+        to_client_tx
+            .send(serde_json::to_vec(&server_request)?)
+            .await
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        let written = tokio::time::timeout(std::time::Duration::from_secs(1), to_server_rx.recv())
+            .await
+            .map_err(|_| anyhow::anyhow!("timeout waiting for success response"))?
+            .ok_or_else(|| anyhow::anyhow!("client write channel closed"))?;
+
+        let json: serde_json::Value = serde_json::from_slice(&written)?;
+        assert_eq!(json.get("id").and_then(|v| v.as_i64()), Some(8));
+        assert!(json.get("result").is_some());
+        assert!(json.get("error").is_none());
 
         Ok(())
     }
