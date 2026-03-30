@@ -1,7 +1,9 @@
 // low-level stdio transport: framing (Content-Length) and raw read/write
 use crate::lsp::transport::LspTransport;
 use anyhow::anyhow;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::process::Stdio;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 /*
 pub struct StdioTransport {
@@ -76,3 +78,36 @@ fn get_content_length_from(header: &str) -> anyhow::Result<usize> {
 
 // Note: FramedTransport implementations are provided by `framed_wrapper.rs` (FramedBox),
 // which wraps a `Box<dyn LspTransport>` and provides message-level APIs.
+
+/// Spawn an LSP server process and return a handle to the child process together
+/// with a `StdioTransport` already wired to its stdin/stdout.
+///
+/// The caller is responsible for keeping the returned `Child` alive for the
+/// duration of the LSP session.
+pub fn spawn_lsp_process(
+    exe: &str,
+    args: &[&str],
+) -> anyhow::Result<(Child, StdioTransport<ChildStdin, BufReader<ChildStdout>>)> {
+    let mut cmd = Command::new(exe);
+    for a in args {
+        cmd.arg(a);
+    }
+
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+
+    let writer = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow!("transport: failed to take child stdin"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("transport: failed to take child stdout"))?;
+    let reader = BufReader::new(stdout);
+
+    Ok((child, StdioTransport::new(writer, reader)))
+}
