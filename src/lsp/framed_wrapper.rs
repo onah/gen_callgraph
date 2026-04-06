@@ -2,7 +2,6 @@ use crate::lsp::framed::FramedTransport;
 use crate::lsp::message_parser::{parse_message_from_slice, parse_server_request_from_slice};
 use crate::lsp::transport::LspTransport;
 use crate::lsp::types::{Message, Notification, Request};
-use crate::trace;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -107,11 +106,6 @@ impl IoTask {
     async fn dispatch_incoming(&mut self, buf: Vec<u8>) {
         match parse_server_request_from_slice(&buf) {
             Ok(Some((id, method))) => {
-                trace::log(
-                    "framed-wrapper",
-                    "server-request",
-                    &format!("id={} method={}", id, method),
-                );
                 if let Err(e) = self.respond_to_server_request(id, &method, &buf).await {
                     eprintln!("transport write error: {}", e);
                 }
@@ -136,13 +130,7 @@ impl IoTask {
             Message::Error(err) => self.resolve_pending(err.id, Message::Error(err)).await,
             Message::Notification(note) => {
                 // If the receiver has been dropped or the buffer is full, discard.
-                if self.notification_tx.try_send(note).is_err() {
-                    trace::log(
-                        "framed-wrapper",
-                        "notification-drop",
-                        "notification queue full or receiver closed",
-                    );
-                }
+                if self.notification_tx.try_send(note).is_err() {}
             }
         }
     }
@@ -158,21 +146,11 @@ impl IoTask {
             | "client/unregisterCapability"
             | "window/workDoneProgress/create"
             | "window/showDocument" => {
-                trace::log(
-                    "framed-wrapper",
-                    "server-request-response",
-                    &format!("id={} method={} result=null", id, method),
-                );
                 self.send_server_request_result(id, serde_json::Value::Null)
                     .await
             }
             "workspace/configuration" => {
                 let result = Self::workspace_configuration_result(raw_buf)?;
-                trace::log(
-                    "framed-wrapper",
-                    "server-request-response",
-                    &format!("id={} method={} result=array", id, method),
-                );
                 self.send_server_request_result(id, result).await
             }
             _ => self.send_method_not_found(id, method).await,
@@ -206,11 +184,6 @@ impl IoTask {
     }
 
     async fn send_method_not_found(&mut self, id: i32, method: &str) -> anyhow::Result<()> {
-        trace::log(
-            "framed-wrapper",
-            "server-request-response",
-            &format!("id={} method={} error=-32601", id, method),
-        );
         let response = serde_json::json!({
             "jsonrpc": "2.0",
             "id": id,

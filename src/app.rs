@@ -5,17 +5,8 @@ use crate::call_graph_builder::CodeAnalyzer;
 use crate::cli::Config;
 use crate::lsp;
 use crate::lsp::stdio_transport::spawn_lsp_process;
-use crate::trace;
 
 pub async fn run(config: Config) -> anyhow::Result<()> {
-    trace::log(
-        "app",
-        "run-start",
-        &format!(
-            "workspace={} entry={} output={}",
-            config.workspace, config.entry_function, config.output_path
-        ),
-    );
     let (_child, stdio) = spawn_lsp_process("rust-analyzer", &[])?;
 
     let lsp_client = lsp::LspClient::new(Box::new(stdio), config.workspace);

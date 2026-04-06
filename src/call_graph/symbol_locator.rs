@@ -1,5 +1,4 @@
 use crate::lsp;
-use crate::trace;
 use lsp_types::{SymbolInformation, SymbolKind};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -27,7 +26,7 @@ pub(crate) async fn workspace_function_symbols(
     client: &mut lsp::LspClient,
 ) -> anyhow::Result<Vec<SymbolInformation>> {
     let symbols = client.workspace_symbol("").await?;
-    let raw_count = symbols.len();
+    //let raw_count = symbols.len();
     let filtered: Vec<SymbolInformation> = symbols
         .into_iter()
         .filter(|s| {
@@ -35,11 +34,7 @@ pub(crate) async fn workspace_function_symbols(
                 && client.is_uri_in_workspace(&s.location.uri)
         })
         .collect();
-    trace::log(
-        "symbol-locator",
-        "workspace-filter",
-        &format!("raw_count={} filtered_count={}", raw_count, filtered.len()),
-    );
+
     Ok(filtered)
 }
 

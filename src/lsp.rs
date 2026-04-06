@@ -10,7 +10,6 @@ pub mod types;
 // Using `anyhow::Error` directly across the codebase; removed `DynError alias.
 use crate::lsp::framed::FramedTransport;
 use crate::lsp::types::{Message, Notification};
-use crate::trace;
 use lsp_types::{CallHierarchyItem, CallHierarchyOutgoingCall, SymbolInformation};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -144,11 +143,6 @@ impl LspClient {
         &mut self,
         query: &str,
     ) -> anyhow::Result<Vec<SymbolInformation>> {
-        trace::log(
-            "lsp-client",
-            "workspace-symbol-request",
-            &format!("query={}", query),
-        );
         let request = self.message_builder.create_request(
             "workspace/symbol",
             Some(serde_json::json!({"query": query})),
@@ -165,11 +159,6 @@ impl LspClient {
                     Some(result) => serde_json::from_value(result)?,
                     None => Vec::new(),
                 };
-                trace::log(
-                    "lsp-client",
-                    "workspace-symbol-response",
-                    &format!("count={}", symbols.len()),
-                );
                 Ok(symbols)
             }
             Message::Error(error) => Err(Self::protocol_error_for_response(
