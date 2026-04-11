@@ -23,6 +23,41 @@ pub struct LspClient {
 }
 
 impl LspClient {
+    /// Generic helper for sending LSP requests and deserializing responses.
+    ///
+    /// This method handles the common pattern of:
+    /// 1. Creating a request
+    /// 2. Sending it via the communicator
+    /// 3. Matching the response type
+    /// 4. Deserializing the result
+    async fn request<P, R>(
+        &mut self,
+        method: &str,
+        params: P,
+        timeout: Option<Duration>,
+    ) -> anyhow::Result<R>
+    where
+        P: serde::Serialize,
+        R: serde::de::DeserializeOwned,
+    {
+        let request = self.message_builder.create_request(method, params)?;
+        let response = self.communicator.send_and_wait(request, timeout).await?;
+
+        match response {
+            Message::Response(resp) => {
+                let result = resp
+                    .result
+                    .ok_or_else(|| anyhow::anyhow!("protocol:{} response has no result", method))?;
+                Ok(serde_json::from_value(result)?)
+            }
+            Message::Error(error) => Err(Self::protocol_error_for_response(method, error.error)),
+            Message::Notification(note) => Err(Self::protocol_error_unexpected_notification(
+                method,
+                &note.method,
+            )),
+        }
+    }
+
     fn expect_response(
         method: &str,
         response: Message,
@@ -143,33 +178,12 @@ impl LspClient {
         &mut self,
         query: &str,
     ) -> anyhow::Result<Vec<SymbolInformation>> {
-        let request = self.message_builder.create_request(
+        self.request(
             "workspace/symbol",
-            Some(serde_json::json!({"query": query})),
-        )?;
-
-        let response = self
-            .communicator
-            .send_and_wait(request, Some(Duration::from_secs(10)))
-            .await?;
-
-        match response {
-            Message::Response(response) => {
-                let symbols: Vec<SymbolInformation> = match response.result {
-                    Some(result) => serde_json::from_value(result)?,
-                    None => Vec::new(),
-                };
-                Ok(symbols)
-            }
-            Message::Error(error) => Err(Self::protocol_error_for_response(
-                "workspace/symbol",
-                error.error,
-            )),
-            Message::Notification(note) => Err(Self::protocol_error_unexpected_notification(
-                "workspace/symbol",
-                &note.method,
-            )),
-        }
+            serde_json::json!({"query": query}),
+            Some(Duration::from_secs(10)),
+        )
+        .await
     }
 
     pub(crate) async fn text_document_prepare_call_hierarchy(
@@ -183,67 +197,27 @@ impl LspClient {
             "position": symbol.location.range.start
         });
 
-        let request = self
-            .message_builder
-            .create_request("textDocument/prepareCallHierarchy", Some(params))?;
-
-        let response = self
-            .communicator
-            .send_and_wait(request, Some(Duration::from_secs(10)))
-            .await?;
-
-        match response {
-            Message::Response(response) => {
-                let result = response.result.ok_or_else(|| {
-                    anyhow::anyhow!("prepareCallHierarchy response has no result")
-                })?;
-                let items: Vec<CallHierarchyItem> = serde_json::from_value(result)?;
-                Ok(items)
-            }
-            Message::Error(error) => Err(Self::protocol_error_for_response(
-                "textDocument/prepareCallHierarchy",
-                error.error,
-            )),
-            Message::Notification(note) => Err(Self::protocol_error_unexpected_notification(
-                "textDocument/prepareCallHierarchy",
-                &note.method,
-            )),
-        }
+        self.request(
+            "textDocument/prepareCallHierarchy",
+            params,
+            Some(Duration::from_secs(10)),
+        )
+        .await
     }
 
     pub(crate) async fn call_hierarchy_outgoing_calls(
         &mut self,
         item: &CallHierarchyItem,
     ) -> anyhow::Result<Vec<CallHierarchyOutgoingCall>> {
-        let request = self.message_builder.create_request(
+        self.request(
             "callHierarchy/outgoingCalls",
-            Some(serde_json::json!({"item": item})),
-        )?;
-
-        let response = self
-            .communicator
-            .send_and_wait(request, Some(Duration::from_secs(10)))
-            .await?;
-
-        match response {
-            Message::Response(response) => {
-                if let Some(result) = response.result {
-                    let calls: Vec<CallHierarchyOutgoingCall> = serde_json::from_value(result)?;
-                    Ok(calls)
-                } else {
-                    Ok(vec![])
-                }
-            }
-            Message::Error(error) => Err(Self::protocol_error_for_response(
-                "callHierarchy/outgoingCalls",
-                error.error,
-            )),
-            Message::Notification(note) => Err(Self::protocol_error_unexpected_notification(
-                "callHierarchy/outgoingCalls",
-                &note.method,
-            )),
-        }
+            serde_json::json!({"item": item}),
+            Some(Duration::from_secs(10)),
+        )
+        .await
     }
+
+    
 
     /// Wait for the next server-to-client notification.
     ///
