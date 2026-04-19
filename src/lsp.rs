@@ -10,7 +10,9 @@ pub mod types;
 // Using `anyhow::Error` directly across the codebase; removed `DynError alias.
 use crate::lsp::framed::FramedTransport;
 use crate::lsp::types::{Message, Notification};
-use lsp_types::{CallHierarchyItem, CallHierarchyOutgoingCall, SymbolInformation};
+use lsp_types::{
+    CallHierarchyItem, CallHierarchyOutgoingCall, InitializeResult, SymbolInformation,
+};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -152,26 +154,37 @@ impl LspClient {
         normalized.starts_with(&self.workspace_root_path)
     }
 
-    pub async fn initialize(&mut self) -> anyhow::Result<()> {
+    pub async fn initialize(
+        &mut self,
+        timeout: Option<Duration>,
+    ) -> anyhow::Result<InitializeResult> {
         let request = self.message_builder.initialize(&self.workspace_root)?;
-        let response = self
-            .communicator
-            .send_and_wait(request, Some(Duration::from_secs(10)))
-            .await?;
-        let initialize_result = Self::expect_response("initialize", response)?;
-        if initialize_result.is_none() {
-            return Err(anyhow::anyhow!(
-                "protocol:initialize response has no result"
-            ));
-        }
+        let response = self.communicator.send_and_wait(request, timeout).await?;
+
+        let result = match response {
+            Message::Response(resp) => {
+                let value = resp
+                    .result
+                    .ok_or_else(|| anyhow::anyhow!("protocol:initialize response has no result"))?;
+                serde_json::from_value::<InitializeResult>(value)?
+            }
+            Message::Error(error) => {
+                return Err(Self::protocol_error_for_response("initialize", error.error))
+            }
+            Message::Notification(note) => {
+                return Err(Self::protocol_error_unexpected_notification(
+                    "initialize",
+                    &note.method,
+                ))
+            }
+        };
 
         let initialized_notification = self.message_builder.initialized_notification()?;
-        // send initialized notification
         self.communicator
             .send_notification(initialized_notification)
             .await?;
 
-        Ok(())
+        Ok(result)
     }
 
     pub(crate) async fn workspace_symbol(
@@ -216,8 +229,6 @@ impl LspClient {
         )
         .await
     }
-
-    
 
     /// Wait for the next server-to-client notification.
     ///

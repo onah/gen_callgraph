@@ -16,9 +16,11 @@ impl CodeAnalyzer {
         CodeAnalyzer { client }
     }
 
-    pub async fn initialize(&mut self) -> anyhow::Result<()> {
-        self.client.initialize().await?;
-        Ok(())
+    pub async fn initialize(
+        &mut self,
+        timeout: Option<std::time::Duration>,
+    ) -> anyhow::Result<lsp_types::InitializeResult> {
+        self.client.initialize(timeout).await
     }
 
     pub async fn generate_call_graph(&mut self, entry: &str) -> anyhow::Result<CallGraph> {

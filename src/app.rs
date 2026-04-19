@@ -13,7 +13,10 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let mut code_analyzer = CodeAnalyzer::new(lsp_client);
 
     let _result = async {
-        match code_analyzer.initialize().await {
+        match code_analyzer
+            .initialize(Some(Duration::from_secs(10)))
+            .await
+        {
             Ok(_) => println!("Initialization Success"),
             Err(e) => eprintln!("Initialization Error: {:?}", e),
         };

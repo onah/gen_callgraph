@@ -9,6 +9,7 @@
 
 ## MCP Server
  - Use serena MCP if available.
-
+   - Do not use the MCP for file reads or writes.
+ 
 ## Prompt
 - Usually, prompt responses should be in Japanese.
