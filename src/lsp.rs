@@ -11,7 +11,8 @@ pub mod types;
 use crate::lsp::framed::FramedTransport;
 use crate::lsp::types::{Message, Notification};
 use lsp_types::{
-    CallHierarchyItem, CallHierarchyOutgoingCall, InitializeResult, SymbolInformation,
+    CallHierarchyItem, CallHierarchyOutgoingCall, DocumentSymbol, InitializeResult,
+    SymbolInformation,
 };
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -21,6 +22,8 @@ pub struct LspClient {
     message_builder: message_creator::MessageBuilder,
     workspace_root: String,
     workspace_root_path: PathBuf,
+    // Note: crate_name is kept for potential future use
+    #[allow(dead_code)]
     crate_name: String,
 }
 
@@ -138,10 +141,13 @@ impl LspClient {
         None
     }
 
+    // Note: These methods are kept for potential future use
+    #[allow(dead_code)]
     pub(crate) fn workspace_root_path(&self) -> &Path {
         &self.workspace_root_path
     }
 
+    #[allow(dead_code)]
     pub(crate) fn crate_name(&self) -> &str {
         &self.crate_name
     }
@@ -259,6 +265,50 @@ impl LspClient {
         self.communicator.send_notification(notification).await?;
 
         Ok(())
+    }
+
+    pub(crate) async fn text_document_did_open(
+        &mut self,
+        uri: &lsp_types::Url,
+        language_id: &str,
+        text: String,
+    ) -> anyhow::Result<()> {
+        let params = serde_json::json!({
+            "textDocument": {
+                "uri": uri,
+                "languageId": language_id,
+                "version": 1,
+                "text": text
+            }
+        });
+
+        let notification = self
+            .message_builder
+            .create_notification("textDocument/didOpen", params)?;
+        self.communicator.send_notification(notification).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn text_document_document_symbol(
+        &mut self,
+        uri: &lsp_types::Url,
+    ) -> anyhow::Result<Vec<DocumentSymbol>> {
+        let params = serde_json::json!({
+            "textDocument": {
+                "uri": uri
+            }
+        });
+
+        // DocumentSymbol can be returned as either Vec<DocumentSymbol> or Vec<SymbolInformation>
+        // We request with timeout and deserialize as DocumentSymbol
+        let result: Vec<DocumentSymbol> = self
+            .request(
+                "textDocument/documentSymbol",
+                params,
+                Some(Duration::from_secs(10)),
+            )
+            .await?;
+        Ok(result)
     }
     /*
     pub async fn did_open_notification(

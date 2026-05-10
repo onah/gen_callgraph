@@ -40,6 +40,12 @@ impl CodeAnalyzer {
     }
 
     async fn collect_call_graph_from(&mut self, entry: &str) -> anyhow::Result<CallGraph> {
+        // Fetch all workspace symbols for name resolution
+        // This provides container_name information for better grouping
+        let function_symbols = self.client.workspace_symbol("").await?;
+        let workspace_root_path = self.client.workspace_root_path().to_path_buf();
+        let crate_name = self.client.crate_name().to_string();
+
         let Some(symbol) = symbol_locator::find_function_symbol_with_retry(
             &mut self.client,
             entry,
@@ -50,8 +56,6 @@ impl CodeAnalyzer {
         else {
             return Err(anyhow::anyhow!("entry function not found: {}", entry));
         };
-
-        let function_symbols = symbol_locator::workspace_function_symbols(&mut self.client).await?;
 
         let roots = self
             .client
@@ -75,11 +79,12 @@ impl CodeAnalyzer {
             }
 
             let from_id = Self::call_item_key(&item);
+            // Resolve metadata using comprehensive strategy (LSP + heuristics)
             let from_meta = meta_resolver::resolve_function_meta(
                 &item,
                 &function_symbols,
-                self.client.workspace_root_path(),
-                self.client.crate_name(),
+                &workspace_root_path,
+                &crate_name,
             );
             node_info.insert(
                 from_id.clone(),
@@ -99,11 +104,12 @@ impl CodeAnalyzer {
                 }
 
                 let to_id = Self::call_item_key(&child);
+                // Resolve metadata using comprehensive strategy (LSP + heuristics)
                 let to_meta = meta_resolver::resolve_function_meta(
                     &child,
                     &function_symbols,
-                    self.client.workspace_root_path(),
-                    self.client.crate_name(),
+                    &workspace_root_path,
+                    &crate_name,
                 );
                 node_info.insert(to_id.clone(), (to_meta.qualified_label, to_meta.group));
                 visited_edges.insert((from_id.clone(), to_id.clone()));

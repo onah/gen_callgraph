@@ -21,9 +21,32 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
             Err(e) => eprintln!("Initialization Error: {:?}", e),
         };
 
-        let _ = code_analyzer
-            .wait_notification(Some(Duration::from_millis(1)))
-            .await;
+        // Wait for rust-analyzer to index the workspace
+        // We need to wait for multiple notifications to ensure indexing is complete
+        println!("Waiting for rust-analyzer to index the workspace...");
+        for i in 0..50 {
+            match code_analyzer
+                .wait_notification(Some(Duration::from_millis(500)))
+                .await
+            {
+                Ok(_) => {
+                    if i % 5 == 0 {
+                        println!("  Still indexing... ({} notifications received)", i + 1);
+                    }
+                }
+                Err(_) => {
+                    // Timeout means no more notifications for a while
+                    if i > 5 {
+                        println!("  Indexing appears complete (no notifications for 500ms)");
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Give a bit more time to settle
+        println!("Waiting additional 2 seconds for indexing to complete...");
+        tokio::time::sleep(Duration::from_secs(2)).await;
 
         match code_analyzer
             .generate_call_graph(&config.entry_function)
