@@ -3,6 +3,7 @@ mod call_graph;
 mod call_graph_builder;
 mod cli;
 mod dot_renderer;
+mod error;
 mod lsp;
 use cli::Cli;
 
