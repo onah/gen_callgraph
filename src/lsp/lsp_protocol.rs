@@ -1,4 +1,22 @@
-use crate::lsp::framed::FramedTransport;
+//! # Protocol Layer
+//!
+//! Handles JSON-RPC 2.0 protocol processing and asynchronous message management.
+//!
+//! ## Responsibilities
+//! - Abstracting protocol operations via the [`FramedTransport`] trait
+//! - Asynchronously mapping sent requests to their responses (request ID tracking)
+//! - Auto-responding to server-initiated requests
+//! - Queuing server-to-client notifications
+//!
+//! ## Key Types
+//! - [`FramedTransport`]: Abstract trait for the Protocol Layer; used to swap in mocks during testing
+//! - [`FramedBox`]: Concrete implementation wrapping `LspTransport`; multiplexes I/O via a background task
+//!
+//! ## Internal Structure
+//! [`FramedBox`] owns a background task ([`IoTask`]) that concurrently processes sends and receives
+//! using `tokio::select!`. A dedicated `oneshot` channel is created per request to await its
+//! response, allowing multiple concurrent in-flight requests.
+
 use crate::lsp::message_parser::{parse_message_from_slice, parse_server_request_from_slice};
 use crate::lsp::transport::LspTransport;
 use crate::lsp::types::{Message, Notification, Request};
@@ -8,33 +26,101 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, Mutex};
 
+// ---------------------------------------------------------------------------
+// FramedTransport trait
+// ---------------------------------------------------------------------------
+
+/// Abstract interface for the Protocol Layer.
+///
+/// Sits above the Transport Layer and provides send/receive operations at the
+/// JSON-RPC message level. [`FramedBox`] is the concrete implementation; a mock
+/// can be substituted during testing.
+///
+/// # Default Implementation
+/// [`send_and_wait`] is provided as a convenience method that combines
+/// [`send_request`] and [`wait_response`].
+#[async_trait]
+pub trait FramedTransport: Send + Sync {
+    /// Sends a request and returns the assigned request ID.
+    ///
+    /// Hands the request off to the background task and registers it internally
+    /// so that the corresponding response can be retrieved via [`wait_response`].
+    async fn send_request(&mut self, request: Request) -> anyhow::Result<i32>;
+
+    /// Convenience method that sends a request and waits for its response.
+    ///
+    /// Calls [`send_request`] followed by [`wait_response`].
+    async fn send_and_wait(
+        &mut self,
+        request: Request,
+        timeout: Option<Duration>,
+    ) -> anyhow::Result<Message> {
+        let id = self.send_request(request).await?;
+        self.wait_response(id, timeout).await
+    }
+
+    /// Sends a notification (no response expected).
+    async fn send_notification(&mut self, notification: Notification) -> anyhow::Result<()>;
+
+    /// Waits for the response corresponding to the given request ID.
+    ///
+    /// Returns a timeout error if `timeout` is `Some` and the duration elapses.
+    async fn wait_response(
+        &mut self,
+        id: i32,
+        timeout: Option<Duration>,
+    ) -> anyhow::Result<Message>;
+
+    /// Waits for the next server-to-client notification.
+    ///
+    /// Returns a timeout error if `timeout` is `Some` and the duration elapses.
+    async fn wait_notification(
+        &mut self,
+        timeout: Option<Duration>,
+    ) -> anyhow::Result<Notification>;
+}
+
+// ---------------------------------------------------------------------------
+// Internal types
+// ---------------------------------------------------------------------------
+
+/// Variants of outgoing messages processed by [`IoTask`].
 enum ClientOutgoing {
     Request(Request),
     Notification(Notification),
 }
 
-/// Async framed transport wrapper that runs a single background task
-/// owning the `LspTransport`. It supports concurrent requests by
-/// registering pending oneshot channels keyed by request id.
+// ---------------------------------------------------------------------------
+// FramedBox
+// ---------------------------------------------------------------------------
+
+/// Concrete implementation of the Protocol Layer that wraps [`LspTransport`].
+///
+/// Spawns an internal background task ([`IoTask`]) via `tokio::spawn` and
+/// processes sends and receives concurrently using `tokio::select!`.
+///
+/// A `oneshot` channel is created per request to track request-response pairs,
+/// enabling multiple concurrent in-flight requests.
 pub struct FramedBox {
     outgoing_tx: mpsc::Sender<ClientOutgoing>,
-    // sender map is used by the background task to resolve responses
+    /// Sender-side channel map used by the background task when a response arrives
     pending_senders: Arc<Mutex<HashMap<i32, oneshot::Sender<Message>>>>,
-    // receiver map is used by callers to await responses
+    /// Receiver-side channel map used by [`wait_response`] callers
     pending_receivers: Arc<Mutex<HashMap<i32, oneshot::Receiver<Message>>>>,
-    // server-to-client notifications queued by the background task
+    /// Queue of server-to-client notifications buffered by the background task
     notification_rx: Mutex<mpsc::Receiver<Notification>>,
 }
 
-/// Background I/O task owned by `FramedBox`.
+// ---------------------------------------------------------------------------
+// IoTask
+// ---------------------------------------------------------------------------
+
+/// Background I/O task owned by [`FramedBox`].
 ///
-/// Runs a `tokio::select!` loop that concurrently:
-/// - takes outgoing messages from the channel and writes them to the transport, and
-/// - reads incoming messages from the transport and delivers them to waiting callers.
-///
-/// When the loop exits (either because all `FramedBox` handles are dropped or because
-/// a fatal read error occurs), any callers still waiting for a response are failed
-/// immediately by draining `pending_senders`.
+/// Receives outgoing messages from `outgoing_rx` and writes them to the transport,
+/// while simultaneously reading from the transport and routing incoming messages.
+/// The loop exits when all [`FramedBox`] handles are dropped or a fatal read error
+/// occurs, at which point all pending requests are failed immediately.
 struct IoTask {
     outgoing_rx: mpsc::Receiver<ClientOutgoing>,
     pending_senders: Arc<Mutex<HashMap<i32, oneshot::Sender<Message>>>>,
@@ -67,16 +153,16 @@ impl IoTask {
                 }
             }
         }
-        // Fail any requests that are still waiting for a response so that callers
-        // see a channel-close error instead of hanging until their timeout fires.
+        // Fail all pending requests so callers see an error immediately
+        // rather than hanging until their timeout fires.
         self.drain_pending_senders().await;
     }
 
-    /// Serialize and write one outgoing message to the transport.
+    /// Serializes and writes one outgoing message to the transport.
     ///
-    /// On failure (serialization or write), removes the corresponding pending sender
-    /// so the caller's `wait_response` sees a channel-close error
-    /// promptly rather than waiting until the timeout expires.
+    /// On failure, removes the corresponding pending sender so that the
+    /// `wait_response` caller sees a channel-close error promptly rather
+    /// than waiting until its timeout fires.
     async fn send_outgoing(&mut self, msg: ClientOutgoing) -> anyhow::Result<()> {
         let maybe_request_id = match &msg {
             ClientOutgoing::Request(r) => Some(r.id),
@@ -94,7 +180,6 @@ impl IoTask {
         };
         if let Err(e) = write_result {
             if let Some(id) = maybe_request_id {
-                // Drop the sender so the caller's receiver wakes up with RecvError.
                 self.pending_senders.lock().await.remove(&id);
             }
             return Err(e);
@@ -102,7 +187,7 @@ impl IoTask {
         Ok(())
     }
 
-    /// Parse and route one incoming payload to the appropriate pending receiver.
+    /// Parses one incoming payload and routes it to the appropriate waiter.
     async fn dispatch_incoming(&mut self, buf: Vec<u8>) {
         match parse_server_request_from_slice(&buf) {
             Ok(Some((id, method))) => {
@@ -129,12 +214,13 @@ impl IoTask {
             Message::Response(resp) => self.resolve_pending(resp.id, Message::Response(resp)).await,
             Message::Error(err) => self.resolve_pending(err.id, Message::Error(err)).await,
             Message::Notification(note) => {
-                // If the receiver has been dropped or the buffer is full, discard.
+                // Discard if the buffer is full or the receiver has been dropped.
                 if self.notification_tx.try_send(note).is_err() {}
             }
         }
     }
 
+    /// Sends an appropriate protocol response to a server-initiated request.
     async fn respond_to_server_request(
         &mut self,
         id: i32,
@@ -196,7 +282,7 @@ impl IoTask {
         self.transport.write(&bytes).await
     }
 
-    /// Deliver `msg` to the oneshot channel registered for `id`.
+    /// Delivers `msg` to the oneshot channel registered for `id`.
     async fn resolve_pending(&self, id: i32, msg: Message) {
         let mut senders = self.pending_senders.lock().await;
         if let Some(tx) = senders.remove(&id) {
@@ -206,14 +292,22 @@ impl IoTask {
         }
     }
 
-    /// Drop all pending senders so that every waiting `wait_response`
-    /// wakes up with a channel-close error instead of hanging until its timeout fires.
+    /// Drops all pending senders so that every waiting `wait_response` caller
+    /// wakes up with a channel-close error instead of hanging until its timeout.
     async fn drain_pending_senders(&self) {
         self.pending_senders.lock().await.clear();
     }
 }
 
+// ---------------------------------------------------------------------------
+// FramedBox impl
+// ---------------------------------------------------------------------------
+
 impl FramedBox {
+    /// Creates a new [`FramedBox`] wrapping the given transport.
+    ///
+    /// Spawns the background task via `tokio::spawn`, so this must be
+    /// called within an async runtime.
     pub fn new(transport: Box<dyn LspTransport + Send + Sync + 'static>) -> Self {
         let (outgoing_tx, outgoing_rx) = mpsc::channel::<ClientOutgoing>(32);
         let (notification_tx, notification_rx) = mpsc::channel::<Notification>(64);
@@ -246,7 +340,6 @@ impl FramedTransport for FramedBox {
         let id = request.id;
         let (tx, rx) = oneshot::channel();
 
-        // register sender for background task and keep receiver locally for caller
         {
             let mut senders = self.pending_senders.lock().await;
             senders.insert(id, tx);
@@ -261,7 +354,6 @@ impl FramedTransport for FramedBox {
             .send(ClientOutgoing::Request(request))
             .await
         {
-            // Channel closed; clean up stale entries to avoid memory leaks.
             self.pending_senders.lock().await.remove(&id);
             self.pending_receivers.lock().await.remove(&id);
             return Err(anyhow::anyhow!("outgoing channel closed: {}", e));
@@ -282,7 +374,6 @@ impl FramedTransport for FramedBox {
         id: i32,
         timeout: Option<Duration>,
     ) -> anyhow::Result<Message> {
-        // take receiver out of map
         let rx_opt = {
             let mut map = self.pending_receivers.lock().await;
             map.remove(&id)
@@ -332,6 +423,10 @@ impl FramedTransport for FramedBox {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,7 +473,6 @@ mod tests {
 
         let mut client = FramedBox::new(Box::new(transport));
 
-        // spawn mock server that echos a response with same id
         tokio::spawn(async move {
             while let Some(req_bytes) = to_server_rx.recv().await {
                 if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&req_bytes) {
@@ -399,7 +493,7 @@ mod tests {
         let id = client.send_request(req).await?;
 
         let msg = client
-            .wait_response(id, Some(std::time::Duration::from_secs(1)))
+            .wait_response(id, Some(Duration::from_secs(1)))
             .await?;
         match msg {
             LspMessage::Response(r) => {
@@ -435,7 +529,7 @@ mod tests {
             .await
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
-        let written = tokio::time::timeout(std::time::Duration::from_secs(1), to_server_rx.recv())
+        let written = tokio::time::timeout(Duration::from_secs(1), to_server_rx.recv())
             .await
             .map_err(|_| anyhow::anyhow!("timeout waiting for method-not-found response"))?
             .ok_or_else(|| anyhow::anyhow!("client write channel closed"))?;
@@ -475,7 +569,7 @@ mod tests {
             .await
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
-        let written = tokio::time::timeout(std::time::Duration::from_secs(1), to_server_rx.recv())
+        let written = tokio::time::timeout(Duration::from_secs(1), to_server_rx.recv())
             .await
             .map_err(|_| anyhow::anyhow!("timeout waiting for success response"))?
             .ok_or_else(|| anyhow::anyhow!("client write channel closed"))?;
