@@ -48,10 +48,18 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         println!("Waiting additional 2 seconds for indexing to complete...");
         tokio::time::sleep(Duration::from_secs(2)).await;
 
-        match code_analyzer
-            .generate_call_graph(&config.entry_function)
-            .await
-        {
+        let graph_result = match &config.entry_function {
+            Some(entry) => {
+                println!("Generating call graph for entry function: {}", entry);
+                code_analyzer.generate_call_graph(entry).await
+            }
+            None => {
+                println!("No entry function specified. Generating call graph for all symbols.");
+                code_analyzer.generate_call_graph_all().await
+            }
+        };
+
+        match graph_result {
             Ok(graph) => {
                 let dot = crate::dot_renderer::to_dot(&graph);
                 if let Err(e) = fs::write(&config.output_path, dot) {

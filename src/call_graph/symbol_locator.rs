@@ -169,6 +169,94 @@ fn find_function_in_document_symbols(
     None
 }
 
+/// Collects all function/method symbols from every Rust source file under `src/`.
+/// Used as a fallback when `workspace/symbol ""` returns no results.
+pub(crate) async fn find_all_workspace_functions(
+    client: &mut lsp::LspClient,
+) -> anyhow::Result<Vec<SymbolInformation>> {
+    let workspace_root = PathBuf::from(client.workspace_root_path());
+    let src_dir = workspace_root.join("src");
+
+    if !src_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let rust_files = collect_rust_files(&src_dir);
+    println!(
+        "  Scanning {} source files for function symbols...",
+        rust_files.len()
+    );
+
+    let mut all_symbols: Vec<SymbolInformation> = Vec::new();
+
+    for file_path in &rust_files {
+        let Ok(content) = std::fs::read_to_string(file_path) else {
+            continue;
+        };
+        let Ok(uri) = lsp_types::Url::from_file_path(file_path) else {
+            continue;
+        };
+
+        if let Err(_) = client.text_document_did_open(&uri, "rust", content).await {
+            continue;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let doc_symbols = match client.text_document_document_symbol(&uri).await {
+            Ok(syms) => syms,
+            Err(_) => continue,
+        };
+
+        collect_function_symbols_from_doc(&doc_symbols, &uri, &mut all_symbols);
+    }
+
+    Ok(all_symbols)
+}
+
+/// Recursively walks `dir` and returns all `.rs` file paths.
+fn collect_rust_files(dir: &std::path::Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return files;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            files.extend(collect_rust_files(&path));
+        } else if path.extension().map_or(false, |e| e == "rs") {
+            files.push(path);
+        }
+    }
+    files
+}
+
+/// Flattens a DocumentSymbol tree, collecting all FUNCTION/METHOD symbols as SymbolInformation.
+fn collect_function_symbols_from_doc(
+    symbols: &[lsp_types::DocumentSymbol],
+    uri: &lsp_types::Url,
+    out: &mut Vec<SymbolInformation>,
+) {
+    for sym in symbols {
+        if sym.kind == SymbolKind::FUNCTION || sym.kind == SymbolKind::METHOD {
+            out.push(SymbolInformation {
+                name: sym.name.clone(),
+                kind: sym.kind,
+                tags: sym.tags.clone(),
+                #[allow(deprecated)]
+                deprecated: sym.deprecated,
+                location: lsp_types::Location {
+                    uri: uri.clone(),
+                    range: sym.selection_range,
+                },
+                container_name: None,
+            });
+        }
+        if let Some(children) = &sym.children {
+            collect_function_symbols_from_doc(children, uri, out);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -350,5 +438,108 @@ mod tests {
         // Should not match because it's a struct, not a function
         let result = find_function_in_document_symbols(&symbols, "MyStruct", &uri);
         assert!(result.is_none());
+    }
+
+    // --- helpers for collect_function_symbols_from_doc tests ---
+
+    #[allow(deprecated)]
+    fn make_doc_symbol(
+        name: &str,
+        kind: SymbolKind,
+        children: Option<Vec<lsp_types::DocumentSymbol>>,
+    ) -> lsp_types::DocumentSymbol {
+        let pos = Position { line: 0, character: 0 };
+        let range = Range { start: pos, end: pos };
+        lsp_types::DocumentSymbol {
+            name: name.to_string(),
+            detail: None,
+            kind,
+            tags: None,
+            deprecated: None,
+            range,
+            selection_range: range,
+            children,
+        }
+    }
+
+    // --- collect_function_symbols_from_doc ---
+
+    #[test]
+    fn collect_function_symbols_collects_function_kind() {
+        let uri = Url::parse("file:///test/src/main.rs").unwrap();
+        let symbols = vec![make_doc_symbol("run", SymbolKind::FUNCTION, None)];
+        let mut out = Vec::new();
+        collect_function_symbols_from_doc(&symbols, &uri, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "run");
+        assert_eq!(out[0].kind, SymbolKind::FUNCTION);
+    }
+
+    #[test]
+    fn collect_function_symbols_collects_method_kind() {
+        let uri = Url::parse("file:///test/src/lib.rs").unwrap();
+        let symbols = vec![make_doc_symbol("new", SymbolKind::METHOD, None)];
+        let mut out = Vec::new();
+        collect_function_symbols_from_doc(&symbols, &uri, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "new");
+        assert_eq!(out[0].kind, SymbolKind::METHOD);
+    }
+
+    #[test]
+    fn collect_function_symbols_skips_non_function_kinds() {
+        let uri = Url::parse("file:///test/src/lib.rs").unwrap();
+        let symbols = vec![
+            make_doc_symbol("MyStruct", SymbolKind::STRUCT, None),
+            make_doc_symbol("MY_CONST", SymbolKind::CONSTANT, None),
+            make_doc_symbol("my_mod", SymbolKind::MODULE, None),
+        ];
+        let mut out = Vec::new();
+        collect_function_symbols_from_doc(&symbols, &uri, &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn collect_function_symbols_recurses_into_children() {
+        let uri = Url::parse("file:///test/src/lib.rs").unwrap();
+        let method = make_doc_symbol("new", SymbolKind::METHOD, None);
+        let parent = make_doc_symbol("MyStruct", SymbolKind::STRUCT, Some(vec![method]));
+        let mut out = Vec::new();
+        collect_function_symbols_from_doc(&[parent], &uri, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "new");
+    }
+
+    #[test]
+    fn collect_function_symbols_collects_parent_and_child_functions() {
+        let uri = Url::parse("file:///test/src/lib.rs").unwrap();
+        let child_fn = make_doc_symbol("helper", SymbolKind::FUNCTION, None);
+        let parent_fn = make_doc_symbol(
+            "outer",
+            SymbolKind::FUNCTION,
+            Some(vec![child_fn]),
+        );
+        let mut out = Vec::new();
+        collect_function_symbols_from_doc(&[parent_fn], &uri, &mut out);
+        let names: Vec<&str> = out.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"outer"), "outer should be collected");
+        assert!(names.contains(&"helper"), "helper should be collected");
+    }
+
+    #[test]
+    fn collect_function_symbols_empty_input_returns_empty() {
+        let uri = Url::parse("file:///test/src/main.rs").unwrap();
+        let mut out = Vec::new();
+        collect_function_symbols_from_doc(&[], &uri, &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn collect_function_symbols_uri_is_preserved() {
+        let uri = Url::parse("file:///test/src/main.rs").unwrap();
+        let symbols = vec![make_doc_symbol("run", SymbolKind::FUNCTION, None)];
+        let mut out = Vec::new();
+        collect_function_symbols_from_doc(&symbols, &uri, &mut out);
+        assert_eq!(out[0].location.uri, uri);
     }
 }

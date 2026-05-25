@@ -24,6 +24,51 @@ pub struct MessageBuilder {
     message_factory: RequestIdGenerator,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn initialize_with_relative_path_returns_error() {
+        let mut builder = MessageBuilder::new();
+        assert!(builder.initialize(".").is_err());
+        assert!(builder.initialize("src/main.rs").is_err());
+    }
+
+    #[test]
+    fn initialize_with_absolute_path_produces_file_uri() {
+        let mut builder = MessageBuilder::new();
+        let request = builder.initialize("/tmp/test_workspace").unwrap();
+        let uri = request.params["workspaceFolders"][0]["uri"]
+            .as_str()
+            .expect("workspaceFolders[0].uri should be a string");
+        assert!(
+            uri.starts_with("file:///"),
+            "URI should start with file:///, got: {}",
+            uri
+        );
+        assert!(
+            uri.contains("test_workspace"),
+            "URI should contain the workspace directory name, got: {}",
+            uri
+        );
+    }
+
+    #[test]
+    fn initialize_method_name_is_initialize() {
+        let mut builder = MessageBuilder::new();
+        let request = builder.initialize("/tmp/workspace").unwrap();
+        assert_eq!(request.method, "initialize");
+    }
+
+    #[test]
+    fn initialize_jsonrpc_version_is_2_0() {
+        let mut builder = MessageBuilder::new();
+        let request = builder.initialize("/tmp/workspace").unwrap();
+        assert_eq!(request.jsonrpc, "2.0");
+    }
+}
+
 impl MessageBuilder {
     pub fn new() -> MessageBuilder {
         let message_factory = RequestIdGenerator::new();
@@ -50,7 +95,8 @@ impl MessageBuilder {
     }
 
     pub fn initialize(&mut self, workspace_path: &str) -> anyhow::Result<Request> {
-        let uri = lsp_types::Url::parse(&format!("file://{}", workspace_path))?;
+        let uri = lsp_types::Url::from_file_path(workspace_path)
+            .map_err(|_| anyhow::anyhow!("invalid workspace path: {}", workspace_path))?;
         let initialize_params = InitializeParams {
             process_id: Some(std::process::id()),
             workspace_folders: Some(vec![WorkspaceFolder {

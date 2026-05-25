@@ -7,6 +7,8 @@ A concise checklist to keep Rust code quality high.
 - [ ] Lint clean: `cargo clippy -- -D warnings`
 - [ ] Tests pass: `cargo test`
 - [ ] Add tests for new features
+- [ ] Validate external inputs (CLI args, file paths) at the earliest boundary
+- [ ] Prefer unit tests over temporary debug output (`eprintln!`, `dbg!`) for diagnosis
 - [ ] Document public APIs with `///`
 - [ ] Avoid `unwrap()` / `expect()` unless justified
 - [ ] Do not silently ignore errors (`let _ = ...`)

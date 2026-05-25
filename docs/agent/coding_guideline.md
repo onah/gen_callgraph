@@ -271,6 +271,53 @@ Silent failures, default fallbacks, and deferred error reporting all hide bugs.
   a programming error, and add a descriptive message explaining the invariant.
 - Assertions and invariant checks are valuable documentation as well as guards.
 
+### Concrete Example: CLI Input Validation
+
+A recurring pattern in this project: a bad workspace path passed at the CLI level propagated
+silently through five layers before producing a misleading error message. The fix was to validate
+at the earliest possible boundary.
+
+**Bad (before)**:
+
+```rust
+// cli.rs — no validation; bad path silently carried forward
+pub fn into_config(self) -> Config {
+    Config { workspace: self.workspace.unwrap_or(".".into()), ... }
+}
+
+// ... five layers later ...
+// lsp_client.rs — invalid URI sent to LSP server
+let uri = format!("file://{}", workspace_root);  // "file://." if path was "."
+```
+
+**Good (after)**:
+
+```rust
+// cli.rs — validate at the boundary, fail immediately
+pub fn into_config(self) -> anyhow::Result<Config> {
+    let path = canonicalize(&raw)?;
+    validate_rust_workspace(&path)?;  // <-- rejects bad input right here
+    Ok(Config { workspace: path.to_string_lossy().into(), ... })
+}
+
+/// Pure function: easy to unit test independently of the LSP stack.
+pub fn validate_rust_workspace(path: &Path) -> anyhow::Result<()> {
+    if !path.join("Cargo.toml").exists() {
+        return Err(anyhow::anyhow!(
+            "workspace {:?} is not a Rust project root (no Cargo.toml found). \
+             Run from the project root or pass the correct workspace path.",
+            path
+        ));
+    }
+    Ok(())
+}
+```
+
+Key points:
+- The validation is a **pure function** — testable without spawning any process.
+- The error message tells the user **what** is wrong, **where**, and **how to fix it**.
+- `into_config` returns `Result`, so callers (including `main`) are forced to handle the error.
+
 ---
 
 ## 10. Single Source of Truth (SSOT)

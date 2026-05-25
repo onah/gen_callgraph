@@ -75,7 +75,12 @@ impl LspClient {
         &mut self,
         timeout: Option<Duration>,
     ) -> anyhow::Result<InitializeResult> {
-        let request = self.message_builder.initialize(&self.workspace_root)?;
+        let workspace_path = self
+            .workspace_root_path
+            .to_str()
+            .unwrap_or(&self.workspace_root)
+            .to_string();
+        let request = self.message_builder.initialize(&workspace_path)?;
         let response = self.communicator.send_and_wait(request, timeout).await?;
 
         let result = match response {
