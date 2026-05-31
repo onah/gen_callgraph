@@ -1,3 +1,15 @@
+//! Error types for gen_callgraph operations.
+//!
+//! # Error hierarchy
+//!
+//! ```text
+//! CallGraphError (top-level, wraps everything below)
+//! ├── LspError     — LSP communication failures
+//! ├── SymbolError  — symbol resolution failures
+//! ├── Io           — std::io::Error
+//! └── Other        — anyhow catch-all
+//! ```
+
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -28,21 +40,35 @@ pub enum CallGraphError {
 /// LSP-specific errors
 #[derive(Error, Debug)]
 pub enum LspError {
+    /// The rust-analyzer process failed to start or returned an error during the
+    /// `initialize` handshake. Verify that `rust-analyzer` is installed and in PATH,
+    /// then run `cargo check` to ensure the project compiles.
     #[error("Failed to initialize LSP server: {0}")]
     InitializationFailed(String),
 
+    /// An LSP request did not receive a response within the configured duration.
+    /// rust-analyzer may still be indexing the workspace; the tool retries automatically
+    /// in most cases.
     #[error("LSP server communication timeout after {timeout:?}")]
     Timeout { timeout: std::time::Duration },
 
+    /// The server returned a JSON-RPC error for a request. Check that the project
+    /// compiles (`cargo check`) and inspect the rust-analyzer server logs for details.
     #[error("LSP request '{method}' failed: {reason}")]
     RequestFailed { method: String, reason: String },
 
+    /// The OS could not spawn the rust-analyzer process. Install it with
+    /// `rustup component add rust-analyzer` and verify it is on PATH.
     #[error("Failed to start LSP server process: {0}")]
     ProcessStartFailed(String),
 
+    /// The server returned a response that could not be deserialized into the expected
+    /// type. This typically indicates a rust-analyzer version mismatch.
     #[error("LSP server returned invalid response for '{method}': {reason}")]
     InvalidResponse { method: String, reason: String },
 
+    /// The server returned an error or unexpected result during the `shutdown` sequence.
+    /// Usually safe to ignore — the process will be dropped regardless.
     #[error("LSP server shutdown failed: {0}")]
     ShutdownFailed(String),
 }
@@ -50,24 +76,38 @@ pub enum LspError {
 /// Symbol resolution errors
 #[derive(Error, Debug)]
 pub enum SymbolError {
+    /// The named entry function does not appear in `workspace/symbol` results after all
+    /// retry attempts. Check spelling, ensure the function exists in the workspace, and
+    /// allow time for rust-analyzer indexing to complete.
     #[error("Entry function '{name}' not found in workspace")]
     EntryFunctionNotFound { name: String },
 
+    /// The function was found but `textDocument/prepareCallHierarchy` returned an empty
+    /// list. The function may have no outgoing calls, or rust-analyzer does not support
+    /// call hierarchy for this particular construct.
     #[error("No call hierarchy root found for function '{name}'")]
     NoCallHierarchyRoot { name: String },
 
+    /// A symbol with the requested name exists but has a non-function `SymbolKind`.
+    /// Use a more specific name or qualify it (e.g. `MyStruct::method`).
     #[error("Symbol '{name}' exists but is not a function (kind: {kind:?})")]
     NotAFunction {
         name: String,
         kind: lsp_types::SymbolKind,
     },
 
+    /// The `workspace/symbol` request returned an error. This is transient;
+    /// the tool retries automatically.
     #[error("Failed to resolve workspace symbols: {0}")]
     WorkspaceSymbolFailed(String),
 
+    /// The `textDocument/didOpen` notification could not be sent. Check that the file
+    /// exists and is readable.
     #[error("Failed to open document at {path:?}: {reason}")]
     DocumentOpenFailed { path: PathBuf, reason: String },
 
+    /// `textDocument/documentSymbol` returned an empty result for the file. The file
+    /// may be empty or not yet parsed by rust-analyzer.
     #[error("No symbols found in document {path:?}")]
     NoDocumentSymbols { path: PathBuf },
 }

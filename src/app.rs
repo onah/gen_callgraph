@@ -1,3 +1,9 @@
+//! Orchestration layer. Wires `cli::Config` → LSP client → `CallGraphBuilder` → `DotRenderer`
+//! → file write.
+//!
+//! This module contains no domain logic. It is the only place in the codebase that is
+//! allowed to connect the independent layers (CLI, LSP, builder, renderer) together.
+
 use std::fs;
 use tokio::time::Duration;
 

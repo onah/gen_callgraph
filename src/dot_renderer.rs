@@ -1,3 +1,11 @@
+//! Renders a [`CallGraph`](crate::call_graph::CallGraph) into a GraphViz DOT format string.
+//!
+//! No LSP or analysis knowledge; this module depends only on `CallGraph`. The output is a
+//! `digraph` with:
+//! - One `subgraph cluster_*` per group (rendered left-to-right via `rankdir=LR`)
+//! - Labelled nodes inside each cluster
+//! - Directed edges (`from -> to`) outside the clusters
+
 use crate::call_graph::{CallGraph, CallGraphNode};
 use std::collections::BTreeMap;
 

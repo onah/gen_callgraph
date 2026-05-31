@@ -21,6 +21,7 @@ These guidelines are intended to keep the codebase readable, maintainable, and r
 12. [Error Handling](#12-error-handling)
 13. [Comments and Documentation](#13-comments-and-documentation)
 14. [Small Increments and Continuous Improvement](#14-small-increments-and-continuous-improvement)
+15. [Code Affordance](#15-code-affordance)
 
 ---
 
@@ -448,6 +449,81 @@ pub fn shortest_path(&self, src: NodeId, dst: NodeId) -> Result<Vec<NodeId>> { .
 
 ---
 
+## 15. Code Affordance
+
+> "The design of code should naturally communicate how it is meant to be used —
+> making correct usage easy and incorrect usage difficult or impossible."
+
+### Intent
+
+Affordance, borrowed from UX design, describes how an object signals its own correct use.
+Applied to code, it means structuring APIs, types, and names so that readers and callers
+are guided toward correct usage without requiring extra documentation or tribal knowledge.
+
+### Practices
+
+- **Let types encode constraints.** Use the type system to make invalid states
+  unrepresentable. Prefer `NonZeroU32` over `u32` when zero is illegal;
+  prefer a purpose-built enum over a raw `bool` when meaning is ambiguous.
+- **Make names signal behaviour.** Prefix mutating or effectful operations
+  (`load_`, `save_`, `send_`) to distinguish them from pure accessors.
+  Use `into_` for ownership-consuming conversions and `try_` for fallible ones.
+- **Use visibility as a signal.** `pub` declares a stable contract;
+  `pub(crate)` says "internal only"; private says "implementation detail".
+  Expose only what callers should actually use.
+- **Return `Result` or `Option` to force error handling.** Never let a
+  function panic silently on bad input when a `Result` would make the
+  failure explicit and handleable by the caller.
+- **Guide construction with the Builder pattern.** When a type has
+  mandatory setup steps, use a builder (or type-state pattern) so that
+  omitting a required step is a compile error rather than a runtime panic.
+- **Make the happy path the shortest path.** Correct, idiomatic usage
+  should require the least code; misuse should require deliberate effort.
+
+### Making Illegal States Unrepresentable
+
+```rust
+// Bad: nothing prevents calling send() before connect()
+struct Client { connected: bool }
+impl Client {
+    fn send(&self, msg: &str) { /* panics if not connected */ }
+}
+
+// Good: the type system enforces the correct sequence
+struct Disconnected;
+struct Connected;
+
+struct Client<State> { _state: std::marker::PhantomData<State> }
+
+impl Client<Disconnected> {
+    fn connect(self) -> Result<Client<Connected>, ConnectError> { ... }
+}
+impl Client<Connected> {
+    fn send(&self, msg: &str) -> Result<(), SendError> { ... }
+}
+```
+
+### Naming Affordance Examples
+
+| Intent | Avoid | Prefer |
+|---|---|---|
+| May fail | `parse(s)` → panics | `try_parse(s) -> Result` |
+| Consumes ownership | `get_value()` | `into_value()` |
+| Has side effects | `data()` | `load_data()` |
+| Borrows | `name()` returning clone | `name() -> &str` |
+
+### Relation to Other Principles
+
+| Affordance Guideline | Related Section |
+|---|---|
+| Types encode constraints | § 3 SOLID (ISP, DIP) |
+| Names signal behaviour | § 11 Naming Conventions |
+| Visibility as a signal | § 6 SoC, § 10 SSOT |
+| Return `Result` / `Option` | § 9 Fail Fast, § 12 Error Handling |
+| Illegal states unrepresentable | § 9 Fail Fast |
+
+---
+
 ## Summary Table
 
 | Principle | Core Question to Ask |
@@ -466,3 +542,4 @@ pub fn shortest_path(&self, src: NodeId, dst: NodeId) -> Result<Vec<NodeId>> { .
 | **Composition** | Am I building behavior from small pieces rather than inheriting it? |
 | **Fail Fast** | Will errors surface immediately and explicitly? |
 | **SSOT** | Is every fact stored and maintained in exactly one place? |
+| **Code Affordance** | Does the design guide callers toward correct usage without extra explanation? |

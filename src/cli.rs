@@ -1,15 +1,34 @@
+//! CLI argument parsing. Parses raw arguments via `clap` and validates them before
+//! producing a [`Config`] for the rest of the application.
+
 use clap::Parser;
 use std::path::{Path, PathBuf};
 
+/// Runtime configuration produced from validated CLI arguments.
+///
+/// All paths are canonicalized absolute paths by the time this struct is created.
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// Absolute path to the Rust workspace root (must contain `Cargo.toml`).
     pub workspace: String,
+    /// Optional entry function name to start call graph traversal from.
+    /// When `None`, the tool traverses all workspace functions.
     pub entry_function: Option<String>,
+    /// Path where the generated DOT file will be written.
     pub output_path: String,
 }
 
 /// Returns `Ok(())` when `path` is a valid Rust project root,
 /// or a descriptive error explaining what is wrong.
+///
+/// # Why early validation matters
+///
+/// Before this function existed, a relative or incorrect workspace path (e.g. `.` or a
+/// subdirectory) was passed directly to the LSP initializer, which produced an invalid
+/// `file://.` URI. rust-analyzer silently ignored it, and `workspace/symbol ""` returned
+/// an empty list. The error surfaced much later as a misleading "entry function not found"
+/// message. This function catches the mistake at the boundary before the LSP server is
+/// ever started.
 pub fn validate_rust_workspace(path: &Path) -> anyhow::Result<()> {
     if !path.exists() {
         return Err(anyhow::anyhow!("workspace path {:?} does not exist", path));

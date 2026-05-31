@@ -17,6 +17,7 @@
 //! using `tokio::select!`. A dedicated `oneshot` channel is created per request to await its
 //! response, allowing multiple concurrent in-flight requests.
 
+use crate::error::LspError;
 use crate::lsp::message_parser::{parse_message_from_slice, parse_server_request_from_slice};
 use crate::lsp::transport::LspTransport;
 use crate::lsp::types::{Message, Notification, Request};
@@ -45,7 +46,7 @@ pub trait FramedTransport: Send + Sync {
     ///
     /// Hands the request off to the background task and registers it internally
     /// so that the corresponding response can be retrieved via [`wait_response`].
-    async fn send_request(&mut self, request: Request) -> anyhow::Result<i32>;
+    async fn send_request(&mut self, request: Request) -> Result<i32, LspError>;
 
     /// Convenience method that sends a request and waits for its response.
     ///
@@ -54,13 +55,13 @@ pub trait FramedTransport: Send + Sync {
         &mut self,
         request: Request,
         timeout: Option<Duration>,
-    ) -> anyhow::Result<Message> {
+    ) -> Result<Message, LspError> {
         let id = self.send_request(request).await?;
         self.wait_response(id, timeout).await
     }
 
     /// Sends a notification (no response expected).
-    async fn send_notification(&mut self, notification: Notification) -> anyhow::Result<()>;
+    async fn send_notification(&mut self, notification: Notification) -> Result<(), LspError>;
 
     /// Waits for the response corresponding to the given request ID.
     ///
@@ -69,7 +70,7 @@ pub trait FramedTransport: Send + Sync {
         &mut self,
         id: i32,
         timeout: Option<Duration>,
-    ) -> anyhow::Result<Message>;
+    ) -> Result<Message, LspError>;
 
     /// Waits for the next server-to-client notification.
     ///
@@ -77,7 +78,7 @@ pub trait FramedTransport: Send + Sync {
     async fn wait_notification(
         &mut self,
         timeout: Option<Duration>,
-    ) -> anyhow::Result<Notification>;
+    ) -> Result<Notification, LspError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -336,7 +337,7 @@ impl FramedBox {
 
 #[async_trait]
 impl FramedTransport for FramedBox {
-    async fn send_request(&mut self, request: Request) -> anyhow::Result<i32> {
+    async fn send_request(&mut self, request: Request) -> Result<i32, LspError> {
         let id = request.id;
         let (tx, rx) = oneshot::channel();
 
@@ -356,16 +357,23 @@ impl FramedTransport for FramedBox {
         {
             self.pending_senders.lock().await.remove(&id);
             self.pending_receivers.lock().await.remove(&id);
-            return Err(anyhow::anyhow!("outgoing channel closed: {}", e));
+            return Err(LspError::RequestFailed {
+                method: String::from("send"),
+                reason: format!("outgoing channel closed: {}", e),
+            });
         }
 
         Ok(id)
     }
 
-    async fn send_notification(&mut self, notification: Notification) -> anyhow::Result<()> {
+    async fn send_notification(&mut self, notification: Notification) -> Result<(), LspError> {
         self.outgoing_tx
             .send(ClientOutgoing::Notification(notification))
-            .await?;
+            .await
+            .map_err(|e| LspError::RequestFailed {
+                method: String::from("send_notification"),
+                reason: e.to_string(),
+            })?;
         Ok(())
     }
 
@@ -373,7 +381,7 @@ impl FramedTransport for FramedBox {
         &mut self,
         id: i32,
         timeout: Option<Duration>,
-    ) -> anyhow::Result<Message> {
+    ) -> Result<Message, LspError> {
         let rx_opt = {
             let mut map = self.pending_receivers.lock().await;
             map.remove(&id)
@@ -383,42 +391,46 @@ impl FramedTransport for FramedBox {
             match timeout {
                 Some(dur) => match tokio::time::timeout(dur, &mut rx).await {
                     Ok(Ok(msg)) => Ok(msg),
-                    Ok(Err(_)) => Err(anyhow::anyhow!("response channel closed")),
-                    Err(_) => Err(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "response timeout",
-                    )
-                    .into()),
+                    Ok(Err(_)) => Err(LspError::RequestFailed {
+                        method: String::from("recv"),
+                        reason: String::from("response channel closed"),
+                    }),
+                    Err(_elapsed) => Err(LspError::Timeout { timeout: dur }),
                 },
                 None => match rx.await {
                     Ok(msg) => Ok(msg),
-                    Err(_) => Err(anyhow::anyhow!("response channel closed")),
+                    Err(_) => Err(LspError::RequestFailed {
+                        method: String::from("recv"),
+                        reason: String::from("response channel closed"),
+                    }),
                 },
             }
         } else {
-            Err(anyhow::anyhow!("no pending receiver for id"))
+            Err(LspError::RequestFailed {
+                method: String::from("recv"),
+                reason: String::from("no pending receiver for id"),
+            })
         }
     }
 
     async fn wait_notification(
         &mut self,
         timeout: Option<Duration>,
-    ) -> anyhow::Result<Notification> {
+    ) -> Result<Notification, LspError> {
         let mut rx = self.notification_rx.lock().await;
         match timeout {
             Some(dur) => match tokio::time::timeout(dur, rx.recv()).await {
                 Ok(Some(note)) => Ok(note),
-                Ok(None) => Err(anyhow::anyhow!("notification channel closed")),
-                Err(_) => Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "notification receive timeout",
-                )
-                .into()),
+                Ok(None) => Err(LspError::RequestFailed {
+                    method: String::from("wait_notification"),
+                    reason: String::from("notification channel closed"),
+                }),
+                Err(_elapsed) => Err(LspError::Timeout { timeout: dur }),
             },
-            None => rx
-                .recv()
-                .await
-                .ok_or_else(|| anyhow::anyhow!("notification channel closed")),
+            None => rx.recv().await.ok_or_else(|| LspError::RequestFailed {
+                method: String::from("wait_notification"),
+                reason: String::from("notification channel closed"),
+            }),
         }
     }
 }

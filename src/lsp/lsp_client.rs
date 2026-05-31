@@ -19,6 +19,7 @@
 //! client.shutdown().await?;
 //! ```
 
+use crate::error::LspError;
 use crate::lsp::lsp_protocol::{FramedBox, FramedTransport};
 use crate::lsp::message_creator::MessageBuilder;
 use crate::lsp::types::{Message, Notification};
@@ -74,34 +75,51 @@ impl LspClient {
     pub async fn initialize(
         &mut self,
         timeout: Option<Duration>,
-    ) -> anyhow::Result<InitializeResult> {
+    ) -> Result<InitializeResult, LspError> {
         let workspace_path = self
             .workspace_root_path
             .to_str()
             .unwrap_or(&self.workspace_root)
             .to_string();
-        let request = self.message_builder.initialize(&workspace_path)?;
+        let request = self
+            .message_builder
+            .initialize(&workspace_path)
+            .map_err(|e| LspError::InitializationFailed(e.to_string()))?;
         let response = self.communicator.send_and_wait(request, timeout).await?;
 
         let result = match response {
             Message::Response(resp) => {
-                let value = resp
-                    .result
-                    .ok_or_else(|| anyhow::anyhow!("protocol:initialize response has no result"))?;
-                serde_json::from_value::<InitializeResult>(value)?
+                let value = resp.result.ok_or_else(|| LspError::InvalidResponse {
+                    method: String::from("initialize"),
+                    reason: String::from("response has no result"),
+                })?;
+                serde_json::from_value::<InitializeResult>(value).map_err(|e| {
+                    LspError::InvalidResponse {
+                        method: String::from("initialize"),
+                        reason: format!("failed to deserialize: {}", e),
+                    }
+                })?
             }
             Message::Error(error) => {
-                return Err(Self::protocol_error_for_response("initialize", error.error))
+                return Err(LspError::InitializationFailed(
+                    error
+                        .error
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| String::from("null")),
+                ))
             }
             Message::Notification(note) => {
-                return Err(Self::protocol_error_unexpected_notification(
-                    "initialize",
-                    &note.method,
-                ))
+                return Err(LspError::InvalidResponse {
+                    method: String::from("initialize"),
+                    reason: format!("got unexpected notification: {}", note.method),
+                })
             }
         };
 
-        let initialized_notification = self.message_builder.initialized_notification()?;
+        let initialized_notification = self
+            .message_builder
+            .initialized_notification()
+            .map_err(|e| LspError::InitializationFailed(e.to_string()))?;
         self.communicator
             .send_notification(initialized_notification)
             .await?;
@@ -113,7 +131,7 @@ impl LspClient {
     pub(crate) async fn workspace_symbol(
         &mut self,
         query: &str,
-    ) -> anyhow::Result<Vec<SymbolInformation>> {
+    ) -> Result<Vec<SymbolInformation>, LspError> {
         self.request(
             "workspace/symbol",
             serde_json::json!({"query": query}),
@@ -126,7 +144,7 @@ impl LspClient {
     pub(crate) async fn text_document_prepare_call_hierarchy(
         &mut self,
         symbol: &SymbolInformation,
-    ) -> anyhow::Result<Vec<CallHierarchyItem>> {
+    ) -> Result<Vec<CallHierarchyItem>, LspError> {
         let params = serde_json::json!({
             "textDocument": {
                 "uri": symbol.location.uri
@@ -146,7 +164,7 @@ impl LspClient {
     pub(crate) async fn call_hierarchy_outgoing_calls(
         &mut self,
         item: &CallHierarchyItem,
-    ) -> anyhow::Result<Vec<CallHierarchyOutgoingCall>> {
+    ) -> Result<Vec<CallHierarchyOutgoingCall>, LspError> {
         self.request(
             "callHierarchy/outgoingCalls",
             serde_json::json!({"item": item}),
@@ -161,7 +179,7 @@ impl LspClient {
         uri: &lsp_types::Url,
         language_id: &str,
         text: String,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), LspError> {
         let params = serde_json::json!({
             "textDocument": {
                 "uri": uri,
@@ -173,7 +191,11 @@ impl LspClient {
 
         let notification = self
             .message_builder
-            .create_notification("textDocument/didOpen", params)?;
+            .create_notification("textDocument/didOpen", params)
+            .map_err(|e| LspError::RequestFailed {
+                method: String::from("textDocument/didOpen"),
+                reason: e.to_string(),
+            })?;
         self.communicator.send_notification(notification).await?;
         Ok(())
     }
@@ -182,7 +204,7 @@ impl LspClient {
     pub(crate) async fn text_document_document_symbol(
         &mut self,
         uri: &lsp_types::Url,
-    ) -> anyhow::Result<Vec<DocumentSymbol>> {
+    ) -> Result<Vec<DocumentSymbol>, LspError> {
         let params = serde_json::json!({
             "textDocument": {
                 "uri": uri
@@ -203,15 +225,18 @@ impl LspClient {
     pub async fn wait_notification(
         &mut self,
         timeout: Option<Duration>,
-    ) -> anyhow::Result<Notification> {
+    ) -> Result<Notification, LspError> {
         self.communicator.wait_notification(timeout).await
     }
 
     /// Shuts down the LSP session gracefully.
     ///
     /// Sends the `shutdown` request and, on success, sends the `exit` notification.
-    pub async fn shutdown(&mut self) -> anyhow::Result<()> {
-        let request = self.message_builder.create_request("shutdown", ())?;
+    pub async fn shutdown(&mut self) -> Result<(), LspError> {
+        let request = self
+            .message_builder
+            .create_request("shutdown", ())
+            .map_err(|e| LspError::ShutdownFailed(e.to_string()))?;
 
         let response = self
             .communicator
@@ -219,12 +244,15 @@ impl LspClient {
             .await?;
         let shutdown_result = Self::expect_response("shutdown", response)?;
         if shutdown_result.is_some() {
-            return Err(anyhow::anyhow!(
-                "protocol:shutdown expected null result, got non-null result"
-            ));
+            return Err(LspError::ShutdownFailed(String::from(
+                "expected null result, got non-null result",
+            )));
         }
 
-        let notification = self.message_builder.create_notification("exit", ())?;
+        let notification = self
+            .message_builder
+            .create_notification("exit", ())
+            .map_err(|e| LspError::ShutdownFailed(e.to_string()))?;
         self.communicator.send_notification(notification).await?;
 
         Ok(())
@@ -263,65 +291,63 @@ impl LspClient {
         method: &str,
         params: P,
         timeout: Option<Duration>,
-    ) -> anyhow::Result<R>
+    ) -> Result<R, LspError>
     where
         P: serde::Serialize,
         R: serde::de::DeserializeOwned,
     {
-        let request = self.message_builder.create_request(method, params)?;
+        let request = self
+            .message_builder
+            .create_request(method, params)
+            .map_err(|e| LspError::RequestFailed {
+                method: method.to_string(),
+                reason: e.to_string(),
+            })?;
         let response = self.communicator.send_and_wait(request, timeout).await?;
 
         match response {
             Message::Response(resp) => {
-                let result = resp
-                    .result
-                    .ok_or_else(|| anyhow::anyhow!("protocol:{} response has no result", method))?;
-                Ok(serde_json::from_value(result)?)
+                let result = resp.result.ok_or_else(|| LspError::InvalidResponse {
+                    method: method.to_string(),
+                    reason: String::from("response has no result"),
+                })?;
+                serde_json::from_value(result).map_err(|e| LspError::InvalidResponse {
+                    method: method.to_string(),
+                    reason: format!("failed to deserialize response: {}", e),
+                })
             }
-            Message::Error(error) => Err(Self::protocol_error_for_response(method, error.error)),
-            Message::Notification(note) => Err(Self::protocol_error_unexpected_notification(
-                method,
-                &note.method,
-            )),
+            Message::Error(error) => Err(LspError::RequestFailed {
+                method: method.to_string(),
+                reason: error
+                    .error
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| String::from("null")),
+            }),
+            Message::Notification(note) => Err(LspError::InvalidResponse {
+                method: method.to_string(),
+                reason: format!("got unexpected notification: {}", note.method),
+            }),
         }
     }
 
     fn expect_response(
         method: &str,
         response: Message,
-    ) -> anyhow::Result<Option<serde_json::Value>> {
+    ) -> Result<Option<serde_json::Value>, LspError> {
         match response {
             Message::Response(resp) => Ok(resp.result),
-            Message::Error(error) => Err(Self::protocol_error_for_response(method, error.error)),
-            Message::Notification(note) => Err(Self::protocol_error_unexpected_notification(
-                method,
-                &note.method,
-            )),
+            Message::Error(error) => Err(LspError::RequestFailed {
+                method: method.to_string(),
+                reason: error
+                    .error
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| String::from("null")),
+            }),
+            Message::Notification(note) => Err(LspError::InvalidResponse {
+                method: method.to_string(),
+                reason: format!("got unexpected notification: {}", note.method),
+            }),
         }
-    }
-
-    fn protocol_error_for_response(
-        method: &str,
-        error: Option<serde_json::Value>,
-    ) -> anyhow::Error {
-        anyhow::anyhow!(
-            "protocol:{} returned error response: {}",
-            method,
-            error
-                .map(|e| e.to_string())
-                .unwrap_or_else(|| String::from("null"))
-        )
-    }
-
-    fn protocol_error_unexpected_notification(
-        method: &str,
-        notification_method: &str,
-    ) -> anyhow::Error {
-        anyhow::anyhow!(
-            "protocol:{} got unexpected notification response: {}",
-            method,
-            notification_method
-        )
     }
 
     fn read_crate_name(workspace_root_path: &Path) -> Option<String> {

@@ -1,3 +1,13 @@
+//! Symbol search and discovery within an LSP workspace.
+//!
+//! # Primary entry points
+//!
+//! - [`find_function_symbol_with_retry`]: queries a single symbol by name with retry logic.
+//!   rust-analyzer may not have finished indexing the workspace when first queried;
+//!   this function retries at fixed intervals to tolerate that delay.
+//! - [`find_all_workspace_functions`]: full workspace scan used as a fallback when no
+//!   specific entry function is given.
+
 use crate::lsp;
 use lsp_types::{SymbolInformation, SymbolKind};
 use std::path::PathBuf;
@@ -448,8 +458,14 @@ mod tests {
         kind: SymbolKind,
         children: Option<Vec<lsp_types::DocumentSymbol>>,
     ) -> lsp_types::DocumentSymbol {
-        let pos = Position { line: 0, character: 0 };
-        let range = Range { start: pos, end: pos };
+        let pos = Position {
+            line: 0,
+            character: 0,
+        };
+        let range = Range {
+            start: pos,
+            end: pos,
+        };
         lsp_types::DocumentSymbol {
             name: name.to_string(),
             detail: None,
@@ -514,11 +530,7 @@ mod tests {
     fn collect_function_symbols_collects_parent_and_child_functions() {
         let uri = Url::parse("file:///test/src/lib.rs").unwrap();
         let child_fn = make_doc_symbol("helper", SymbolKind::FUNCTION, None);
-        let parent_fn = make_doc_symbol(
-            "outer",
-            SymbolKind::FUNCTION,
-            Some(vec![child_fn]),
-        );
+        let parent_fn = make_doc_symbol("outer", SymbolKind::FUNCTION, Some(vec![child_fn]));
         let mut out = Vec::new();
         collect_function_symbols_from_doc(&[parent_fn], &uri, &mut out);
         let names: Vec<&str> = out.iter().map(|s| s.name.as_str()).collect();

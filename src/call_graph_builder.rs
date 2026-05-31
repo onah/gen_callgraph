@@ -1,6 +1,28 @@
+//! Call graph traversal orchestration.
+//!
+//! # Responsibility
+//!
+//! This module drives call graph traversal by querying the LSP server. It owns the
+//! [`CodeAnalyzer`] orchestrator struct and the free functions that assemble the final
+//! [`CallGraph`].
+//!
+//! # Pure helper functions
+//!
+//! [`call_item_key`] and [`build_call_graph`] are deliberately extracted as pure, free
+//! functions (not methods on `CodeAnalyzer`) to enable unit testing without an LSP server.
+//! This follows the principle: *if a function cannot be unit tested without spawning an
+//! LSP server, extract the testable logic as a pure helper.*
+//!
+//! # Traversal strategy
+//!
+//! Outgoing calls are explored via a depth-first traversal using an explicit stack
+//! (`Vec`). `visited_nodes` prevents re-expanding the same call hierarchy item;
+//! `visited_edges` deduplicates parallel call edges between the same pair of functions.
+
 use crate::call_graph::meta_resolver;
 use crate::call_graph::symbol_locator;
 use crate::call_graph::{CallGraph, CallGraphEdge, CallGraphNode};
+use crate::error::{CallGraphError, SymbolError};
 use crate::lsp;
 use crate::lsp::types::Notification;
 use lsp_types::{CallHierarchyItem, SymbolInformation, SymbolKind};
@@ -19,19 +41,19 @@ impl CodeAnalyzer {
     pub async fn initialize(
         &mut self,
         timeout: Option<std::time::Duration>,
-    ) -> anyhow::Result<lsp_types::InitializeResult> {
-        self.client.initialize(timeout).await
+    ) -> Result<lsp_types::InitializeResult, CallGraphError> {
+        Ok(self.client.initialize(timeout).await?)
     }
 
-    pub async fn generate_call_graph(&mut self, entry: &str) -> anyhow::Result<CallGraph> {
+    pub async fn generate_call_graph(&mut self, entry: &str) -> Result<CallGraph, CallGraphError> {
         self.collect_call_graph_from(entry).await
     }
 
-    pub async fn generate_call_graph_all(&mut self) -> anyhow::Result<CallGraph> {
+    pub async fn generate_call_graph_all(&mut self) -> Result<CallGraph, CallGraphError> {
         self.collect_call_graph_all_symbols().await
     }
 
-    pub async fn shutdown(&mut self) -> anyhow::Result<()> {
+    pub async fn shutdown(&mut self) -> Result<(), CallGraphError> {
         self.client.shutdown().await?;
         Ok(())
     }
@@ -39,11 +61,11 @@ impl CodeAnalyzer {
     pub async fn wait_notification(
         &mut self,
         timeout: Option<Duration>,
-    ) -> anyhow::Result<Notification> {
-        self.client.wait_notification(timeout).await
+    ) -> Result<Notification, CallGraphError> {
+        Ok(self.client.wait_notification(timeout).await?)
     }
 
-    async fn collect_call_graph_from(&mut self, entry: &str) -> anyhow::Result<CallGraph> {
+    async fn collect_call_graph_from(&mut self, entry: &str) -> Result<CallGraph, CallGraphError> {
         let function_symbols = self.client.workspace_symbol("").await?;
         let workspace_root_path = self.client.workspace_root_path().to_path_buf();
         let crate_name = self.client.crate_name().to_string();
@@ -56,7 +78,10 @@ impl CodeAnalyzer {
         )
         .await?
         else {
-            return Err(anyhow::anyhow!("entry function not found: {}", entry));
+            return Err(SymbolError::EntryFunctionNotFound {
+                name: entry.to_string(),
+            }
+            .into());
         };
 
         let roots = self
@@ -64,10 +89,10 @@ impl CodeAnalyzer {
             .text_document_prepare_call_hierarchy(&symbol)
             .await?;
         if roots.is_empty() {
-            return Err(anyhow::anyhow!(
-                "no call hierarchy root found for: {}",
-                entry
-            ));
+            return Err(SymbolError::NoCallHierarchyRoot {
+                name: entry.to_string(),
+            }
+            .into());
         }
 
         let mut visited_nodes: HashSet<String> = HashSet::new();
@@ -89,7 +114,7 @@ impl CodeAnalyzer {
         Ok(build_call_graph(node_info, visited_edges))
     }
 
-    async fn collect_call_graph_all_symbols(&mut self) -> anyhow::Result<CallGraph> {
+    async fn collect_call_graph_all_symbols(&mut self) -> Result<CallGraph, CallGraphError> {
         let function_symbols = self.client.workspace_symbol("").await?;
         let workspace_root_path = self.client.workspace_root_path().to_path_buf();
         let crate_name = self.client.crate_name().to_string();
@@ -112,7 +137,9 @@ impl CodeAnalyzer {
         }
 
         if workspace_functions.is_empty() {
-            return Err(anyhow::anyhow!("no function symbols found in workspace"));
+            return Err(CallGraphError::call_graph(
+                "no function symbols found in workspace",
+            ));
         }
         println!(
             "Found {} function symbols in workspace",
@@ -251,10 +278,7 @@ impl CodeAnalyzer {
 fn call_item_key(item: &CallHierarchyItem) -> String {
     format!(
         "{}:{}:{}:{}",
-        item.uri,
-        item.selection_range.start.line,
-        item.selection_range.start.character,
-        item.name
+        item.uri, item.selection_range.start.line, item.selection_range.start.character, item.name
     )
 }
 
@@ -267,7 +291,7 @@ async fn traverse_items(
     visited_nodes: &mut HashSet<String>,
     visited_edges: &mut HashSet<(String, String)>,
     node_info: &mut HashMap<String, (String, String)>,
-) -> anyhow::Result<()> {
+) -> Result<(), CallGraphError> {
     let mut stack = initial_items;
 
     while let Some(item) = stack.pop() {
@@ -282,7 +306,10 @@ async fn traverse_items(
             workspace_root_path,
             crate_name,
         );
-        node_info.insert(from_id.clone(), (from_meta.qualified_label, from_meta.group));
+        node_info.insert(
+            from_id.clone(),
+            (from_meta.qualified_label, from_meta.group),
+        );
 
         if !visited_nodes.insert(from_id.clone()) {
             continue;
@@ -347,7 +374,10 @@ mod tests {
     ) -> CallHierarchyItem {
         let url = Url::parse(uri).unwrap();
         let pos = Position { line, character };
-        let range = Range { start: pos, end: pos };
+        let range = Range {
+            start: pos,
+            end: pos,
+        };
         CallHierarchyItem {
             name: name.to_string(),
             kind: SymbolKind::FUNCTION,
@@ -366,7 +396,10 @@ mod tests {
     fn call_item_key_format_contains_uri_position_name() {
         let item = make_call_hierarchy_item("foo", "file:///src/main.rs", 10, 4);
         let key = call_item_key(&item);
-        assert!(key.contains("file:///src/main.rs"), "key should contain URI");
+        assert!(
+            key.contains("file:///src/main.rs"),
+            "key should contain URI"
+        );
         assert!(key.contains("10"), "key should contain line number");
         assert!(key.contains("4"), "key should contain character offset");
         assert!(key.contains("foo"), "key should contain function name");
