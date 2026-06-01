@@ -9,11 +9,13 @@ use tokio::time::Duration;
 
 use crate::call_graph_builder::CodeAnalyzer;
 use crate::cli::Config;
+use crate::error::LspError;
 use crate::lsp;
 use crate::lsp::stdio_transport::spawn_lsp_process;
 
 pub async fn run(config: Config) -> anyhow::Result<()> {
-    let (_child, stdio) = spawn_lsp_process("rust-analyzer", &[])?;
+    let (_child, stdio) = spawn_lsp_process("rust-analyzer", &[])
+        .map_err(|e| LspError::ProcessStartFailed(e.to_string()))?;
 
     let lsp_client = lsp::LspClient::new(Box::new(stdio), config.workspace);
     let mut code_analyzer = CodeAnalyzer::new(lsp_client);

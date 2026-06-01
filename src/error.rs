@@ -10,7 +10,6 @@
 //! └── Other        — anyhow catch-all
 //! ```
 
-use std::path::PathBuf;
 use thiserror::Error;
 
 /// Main error type for gen_callgraph operations
@@ -95,21 +94,6 @@ pub enum SymbolError {
         name: String,
         kind: lsp_types::SymbolKind,
     },
-
-    /// The `workspace/symbol` request returned an error. This is transient;
-    /// the tool retries automatically.
-    #[error("Failed to resolve workspace symbols: {0}")]
-    WorkspaceSymbolFailed(String),
-
-    /// The `textDocument/didOpen` notification could not be sent. Check that the file
-    /// exists and is readable.
-    #[error("Failed to open document at {path:?}: {reason}")]
-    DocumentOpenFailed { path: PathBuf, reason: String },
-
-    /// `textDocument/documentSymbol` returned an empty result for the file. The file
-    /// may be empty or not yet parsed by rust-analyzer.
-    #[error("No symbols found in document {path:?}")]
-    NoDocumentSymbols { path: PathBuf },
 }
 
 impl CallGraphError {

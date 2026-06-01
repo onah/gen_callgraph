@@ -8,6 +8,7 @@
 //! - [`find_all_workspace_functions`]: full workspace scan used as a fallback when no
 //!   specific entry function is given.
 
+use crate::error::{CallGraphError, SymbolError};
 use crate::lsp;
 use lsp_types::{SymbolInformation, SymbolKind};
 use std::path::PathBuf;
@@ -19,7 +20,7 @@ pub(crate) async fn find_function_symbol_with_retry(
     query: &str,
     max_attempts: usize,
     interval: Duration,
-) -> anyhow::Result<Option<SymbolInformation>> {
+) -> Result<Option<SymbolInformation>, CallGraphError> {
     for attempt in 1..=max_attempts {
         if let Some(symbol) = find_function_symbol(client, query).await? {
             return Ok(Some(symbol));
@@ -45,7 +46,7 @@ pub(crate) async fn find_function_symbol_with_retry(
 async fn find_function_symbol(
     client: &mut lsp::LspClient,
     query: &str,
-) -> anyhow::Result<Option<SymbolInformation>> {
+) -> Result<Option<SymbolInformation>, CallGraphError> {
     // Try exact query first
     let symbols = client.workspace_symbol(query).await?;
 
@@ -55,6 +56,20 @@ async fn find_function_symbol(
     } else {
         symbols.clone()
     };
+
+    // If an exact name match exists in workspace but is not a function/method, report it clearly.
+    if let Some(sym) = all_symbols
+        .iter()
+        .find(|s| s.name == query && client.is_uri_in_workspace(&s.location.uri))
+    {
+        if sym.kind != SymbolKind::FUNCTION && sym.kind != SymbolKind::METHOD {
+            return Err(SymbolError::NotAFunction {
+                name: sym.name.clone(),
+                kind: sym.kind,
+            }
+            .into());
+        }
+    }
 
     // First try: exact name match with correct kind and in workspace
     let exact = all_symbols
