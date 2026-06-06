@@ -138,6 +138,7 @@ impl IoTask {
                         Some(msg) => {
                             if let Err(e) = self.send_outgoing(msg).await {
                                 eprintln!("transport write error: {}", e);
+                                break;
                             }
                         }
                         None => break, // all FramedBox handles dropped; clean shutdown
@@ -145,7 +146,12 @@ impl IoTask {
                 }
                 read_result = self.transport.read() => {
                     match read_result {
-                        Ok(buf) => self.dispatch_incoming(buf).await,
+                        Ok(buf) => {
+                            if let Err(e) = self.dispatch_incoming(buf).await {
+                                eprintln!("transport write error: {}", e);
+                                break;
+                            }
+                        }
                         Err(e) => {
                             eprintln!("transport read error: {}", e);
                             break;
@@ -189,18 +195,20 @@ impl IoTask {
     }
 
     /// Parses one incoming payload and routes it to the appropriate waiter.
-    async fn dispatch_incoming(&mut self, buf: Vec<u8>) {
+    ///
+    /// Returns `Err` only when writing a response back to the server fails,
+    /// which is a fatal transport error. Parse errors are logged and the message
+    /// is silently dropped because there is no way to recover from a malformed payload.
+    async fn dispatch_incoming(&mut self, buf: Vec<u8>) -> anyhow::Result<()> {
         match parse_server_request_from_slice(&buf) {
             Ok(Some((id, method))) => {
-                if let Err(e) = self.respond_to_server_request(id, &method, &buf).await {
-                    eprintln!("transport write error: {}", e);
-                }
-                return;
+                self.respond_to_server_request(id, &method, &buf).await?;
+                return Ok(());
             }
             Ok(None) => {}
             Err(e) => {
                 eprintln!("parse server request error: {}", e);
-                return;
+                return Ok(());
             }
         }
 
@@ -208,7 +216,7 @@ impl IoTask {
             Ok(m) => m,
             Err(e) => {
                 eprintln!("parse message error: {}", e);
-                return;
+                return Ok(());
             }
         };
         match message {
@@ -219,6 +227,7 @@ impl IoTask {
                 if self.notification_tx.try_send(note).is_err() {}
             }
         }
+        Ok(())
     }
 
     /// Sends an appropriate protocol response to a server-initiated request.
@@ -284,12 +293,13 @@ impl IoTask {
     }
 
     /// Delivers `msg` to the oneshot channel registered for `id`.
+    ///
+    /// A missing sender is silently ignored: it means the request already timed out and
+    /// the caller received `LspError::Timeout`. Late responses are discarded.
     async fn resolve_pending(&self, id: i32, msg: Message) {
         let mut senders = self.pending_senders.lock().await;
         if let Some(tx) = senders.remove(&id) {
             let _ = tx.send(msg);
-        } else {
-            eprintln!("no pending sender for id={}", id);
         }
     }
 

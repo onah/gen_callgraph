@@ -42,7 +42,7 @@ impl LspSession {
         client.initialize(Some(Duration::from_secs(10))).await?;
         println!("Initialization Success");
 
-        wait_for_indexing(&mut client).await;
+        wait_for_indexing(&mut client).await?;
 
         Ok(LspSession { client, _child })
     }
@@ -71,7 +71,10 @@ impl LspSession {
 /// rust-analyzer streams notifications while indexing. We wait until 500 ms passes
 /// without a notification (after seeing at least 5), which indicates the burst is over,
 /// then sleep an additional 2 s.
-async fn wait_for_indexing(client: &mut lsp::LspClient) {
+///
+/// Returns `Err` if the LSP transport fails (e.g. rust-analyzer process exits unexpectedly).
+/// A `Timeout` — no notification arriving within 500 ms — is a normal quiet period, not an error.
+async fn wait_for_indexing(client: &mut lsp::LspClient) -> anyhow::Result<()> {
     println!("Waiting for rust-analyzer to index the workspace...");
     for i in 0..50 {
         match client
@@ -83,14 +86,21 @@ async fn wait_for_indexing(client: &mut lsp::LspClient) {
                     println!("  Still indexing... ({} notifications received)", i + 1);
                 }
             }
-            Err(_) => {
+            Err(LspError::Timeout { .. }) => {
                 if i > 5 {
                     println!("  Indexing appears complete (no notifications for 500ms)");
                     break;
                 }
             }
+            Err(e) => {
+                return Err(anyhow::anyhow!(
+                    "LSP transport failed during indexing: {}",
+                    e
+                ));
+            }
         }
     }
     println!("Waiting additional 2 seconds for indexing to complete...");
     tokio::time::sleep(Duration::from_secs(2)).await;
+    Ok(())
 }
