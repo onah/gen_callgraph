@@ -134,7 +134,11 @@ async fn find_function_via_document_symbol(
         };
 
         // Send didOpen notification
-        if let Err(_) = client.text_document_did_open(&uri, "rust", content).await {
+        if client
+            .text_document_did_open(&uri, "rust", content)
+            .await
+            .is_err()
+        {
             continue;
         }
 
@@ -222,7 +226,11 @@ pub(crate) async fn find_all_workspace_functions(
             continue;
         };
 
-        if let Err(_) = client.text_document_did_open(&uri, "rust", content).await {
+        if client
+            .text_document_did_open(&uri, "rust", content)
+            .await
+            .is_err()
+        {
             continue;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -248,7 +256,7 @@ fn collect_rust_files(dir: &std::path::Path) -> Vec<PathBuf> {
         let path = entry.path();
         if path.is_dir() {
             files.extend(collect_rust_files(&path));
-        } else if path.extension().map_or(false, |e| e == "rs") {
+        } else if path.extension().is_some_and(|e| e == "rs") {
             files.push(path);
         }
     }
@@ -285,39 +293,12 @@ fn collect_function_symbols_from_doc(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lsp_types::{Location, Position, Range, SymbolKind, Url};
+    use lsp_types::{Position, Range, SymbolKind, Url};
 
     #[test]
     fn test_find_function_in_document_symbols_simple() {
         let uri = Url::parse("file:///test/src/main.rs").unwrap();
-        let symbols = vec![lsp_types::DocumentSymbol {
-            name: "main".to_string(),
-            detail: None,
-            kind: SymbolKind::FUNCTION,
-            tags: None,
-            deprecated: None,
-            range: Range {
-                start: Position {
-                    line: 0,
-                    character: 0,
-                },
-                end: Position {
-                    line: 5,
-                    character: 0,
-                },
-            },
-            selection_range: Range {
-                start: Position {
-                    line: 0,
-                    character: 3,
-                },
-                end: Position {
-                    line: 0,
-                    character: 7,
-                },
-            },
-            children: None,
-        }];
+        let symbols = vec![make_doc_symbol("main", SymbolKind::FUNCTION, None)];
 
         let result = find_function_in_document_symbols(&symbols, "main", &uri);
         assert!(result.is_some());
@@ -329,61 +310,12 @@ mod tests {
     #[test]
     fn test_find_function_in_document_symbols_nested() {
         let uri = Url::parse("file:///test/src/lib.rs").unwrap();
-        let symbols = vec![lsp_types::DocumentSymbol {
-            name: "MyStruct".to_string(),
-            detail: None,
-            kind: SymbolKind::STRUCT,
-            tags: None,
-            deprecated: None,
-            range: Range {
-                start: Position {
-                    line: 0,
-                    character: 0,
-                },
-                end: Position {
-                    line: 10,
-                    character: 0,
-                },
-            },
-            selection_range: Range {
-                start: Position {
-                    line: 0,
-                    character: 7,
-                },
-                end: Position {
-                    line: 0,
-                    character: 15,
-                },
-            },
-            children: Some(vec![lsp_types::DocumentSymbol {
-                name: "new".to_string(),
-                detail: None,
-                kind: SymbolKind::FUNCTION,
-                tags: None,
-                deprecated: None,
-                range: Range {
-                    start: Position {
-                        line: 5,
-                        character: 4,
-                    },
-                    end: Position {
-                        line: 8,
-                        character: 4,
-                    },
-                },
-                selection_range: Range {
-                    start: Position {
-                        line: 5,
-                        character: 7,
-                    },
-                    end: Position {
-                        line: 5,
-                        character: 10,
-                    },
-                },
-                children: None,
-            }]),
-        }];
+        let child = make_doc_symbol("new", SymbolKind::FUNCTION, None);
+        let symbols = vec![make_doc_symbol(
+            "MyStruct",
+            SymbolKind::STRUCT,
+            Some(vec![child]),
+        )];
 
         let result = find_function_in_document_symbols(&symbols, "new", &uri);
         assert!(result.is_some());
@@ -395,34 +327,7 @@ mod tests {
     #[test]
     fn test_find_function_in_document_symbols_not_found() {
         let uri = Url::parse("file:///test/src/main.rs").unwrap();
-        let symbols = vec![lsp_types::DocumentSymbol {
-            name: "main".to_string(),
-            detail: None,
-            kind: SymbolKind::FUNCTION,
-            tags: None,
-            deprecated: None,
-            range: Range {
-                start: Position {
-                    line: 0,
-                    character: 0,
-                },
-                end: Position {
-                    line: 5,
-                    character: 0,
-                },
-            },
-            selection_range: Range {
-                start: Position {
-                    line: 0,
-                    character: 3,
-                },
-                end: Position {
-                    line: 0,
-                    character: 7,
-                },
-            },
-            children: None,
-        }];
+        let symbols = vec![make_doc_symbol("main", SymbolKind::FUNCTION, None)];
 
         let result = find_function_in_document_symbols(&symbols, "nonexistent", &uri);
         assert!(result.is_none());
@@ -431,34 +336,7 @@ mod tests {
     #[test]
     fn test_find_function_in_document_symbols_wrong_kind() {
         let uri = Url::parse("file:///test/src/main.rs").unwrap();
-        let symbols = vec![lsp_types::DocumentSymbol {
-            name: "MyStruct".to_string(),
-            detail: None,
-            kind: SymbolKind::STRUCT,
-            tags: None,
-            deprecated: None,
-            range: Range {
-                start: Position {
-                    line: 0,
-                    character: 0,
-                },
-                end: Position {
-                    line: 5,
-                    character: 0,
-                },
-            },
-            selection_range: Range {
-                start: Position {
-                    line: 0,
-                    character: 7,
-                },
-                end: Position {
-                    line: 0,
-                    character: 15,
-                },
-            },
-            children: None,
-        }];
+        let symbols = vec![make_doc_symbol("MyStruct", SymbolKind::STRUCT, None)];
 
         // Should not match because it's a struct, not a function
         let result = find_function_in_document_symbols(&symbols, "MyStruct", &uri);

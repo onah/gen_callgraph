@@ -146,7 +146,6 @@ fn extract_type_name(type_expr: &str) -> String {
     type_expr
         .trim_start_matches('&')
         .trim_start_matches("mut ")
-        .trim() // Trim whitespace after removing "mut "
         .split_whitespace()
         .next()
         .unwrap_or(type_expr)

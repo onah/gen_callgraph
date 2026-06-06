@@ -35,10 +35,13 @@ pub fn to_dot(graph: &CallGraph) -> String {
         out.push_str("    color=lightgray;\n");
 
         for node in nodes {
+            // The subgraph cluster already shows the container/module via its label,
+            // so display only the bare function/method name here.
+            let short_label = node.label.rsplit("::").next().unwrap_or(&node.label);
             out.push_str(&format!(
                 "    \"{}\" [label=\"{}\"];\n",
                 escape_dot(&node.id),
-                escape_dot(&node.label)
+                escape_dot(short_label)
             ));
         }
         out.push_str("  }\n");
@@ -54,4 +57,77 @@ pub fn to_dot(graph: &CallGraph) -> String {
 
     out.push_str("}\n");
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::call_graph::{CallGraphEdge, CallGraphNode};
+
+    fn make_graph(nodes: Vec<(&str, &str, &str)>, edges: Vec<(&str, &str)>) -> CallGraph {
+        CallGraph {
+            nodes: nodes
+                .into_iter()
+                .map(|(id, label, group)| CallGraphNode {
+                    id: id.to_string(),
+                    label: label.to_string(),
+                    group: group.to_string(),
+                })
+                .collect(),
+            edges: edges
+                .into_iter()
+                .map(|(from, to)| CallGraphEdge {
+                    from: from.to_string(),
+                    to: to.to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn node_label_shows_only_short_name_when_qualified() {
+        let graph = make_graph(vec![("id1", "MyStruct::my_method", "MyStruct")], vec![]);
+        let dot = to_dot(&graph);
+        assert!(
+            dot.contains("[label=\"my_method\"]"),
+            "expected short name in label, got:\n{dot}"
+        );
+        assert!(
+            !dot.contains("[label=\"MyStruct::my_method\"]"),
+            "qualified label should not appear in node label, got:\n{dot}"
+        );
+    }
+
+    #[test]
+    fn node_label_is_unchanged_when_no_separator() {
+        let graph = make_graph(vec![("id1", "standalone_fn", "functions")], vec![]);
+        let dot = to_dot(&graph);
+        assert!(
+            dot.contains("[label=\"standalone_fn\"]"),
+            "plain name should appear unchanged, got:\n{dot}"
+        );
+    }
+
+    #[test]
+    fn subgraph_cluster_label_uses_group() {
+        let graph = make_graph(vec![("id1", "MyStruct::my_method", "MyStruct")], vec![]);
+        let dot = to_dot(&graph);
+        assert!(
+            dot.contains("label=\"MyStruct\";"),
+            "cluster label should be the group name, got:\n{dot}"
+        );
+    }
+
+    #[test]
+    fn edges_are_rendered_with_node_ids() {
+        let graph = make_graph(
+            vec![("id1", "A::foo", "A"), ("id2", "B::bar", "B")],
+            vec![("id1", "id2")],
+        );
+        let dot = to_dot(&graph);
+        assert!(
+            dot.contains("\"id1\" -> \"id2\";"),
+            "edge should use node ids, got:\n{dot}"
+        );
+    }
 }

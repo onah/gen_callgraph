@@ -2,8 +2,8 @@
 //!
 //! # Responsibility
 //!
-//! This module drives call graph traversal by querying the LSP server. It owns the
-//! [`CodeAnalyzer`] orchestrator struct and the free functions that assemble the final
+//! This module drives call graph traversal by querying the LSP server. It contains the
+//! [`CallGraphBuilder`] struct and the free functions that assemble the final
 //! [`CallGraph`].
 //!
 //! # Pure helper functions
@@ -24,25 +24,34 @@ use crate::call_graph::symbol_locator;
 use crate::call_graph::{CallGraph, CallGraphEdge, CallGraphNode};
 use crate::error::{CallGraphError, SymbolError};
 use crate::lsp;
-use crate::lsp::types::Notification;
+
 use lsp_types::{CallHierarchyItem, SymbolInformation, SymbolKind};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-pub struct CodeAnalyzer {
-    client: lsp::LspClient,
+/// Builds a call graph by driving LSP queries against an active session.
+///
+/// `CallGraphBuilder` borrows the [`lsp::LspClient`] from the caller; it does not own
+/// the LSP session. Lifecycle management (initialize, indexing wait, shutdown) is the
+/// responsibility of [`crate::lsp_session::LspSession`].
+pub struct CallGraphBuilder<'a> {
+    client: &'a mut lsp::LspClient,
 }
 
-impl CodeAnalyzer {
-    pub fn new(client: lsp::LspClient) -> Self {
-        CodeAnalyzer { client }
-    }
+/// Read-only context passed to [`traverse_items`] for resolving function metadata.
+/// Groups the three parameters that are forwarded verbatim to [`meta_resolver::resolve_function_meta`].
+struct MetaContext<'a> {
+    function_symbols: &'a [SymbolInformation],
+    workspace_root_path: &'a std::path::Path,
+    crate_name: &'a str,
+}
 
-    pub async fn initialize(
-        &mut self,
-        timeout: Option<std::time::Duration>,
-    ) -> Result<lsp_types::InitializeResult, CallGraphError> {
-        Ok(self.client.initialize(timeout).await?)
+impl<'a> CallGraphBuilder<'a> {
+    /// Creates a new `CallGraphBuilder` that borrows the given [`lsp::LspClient`].
+    ///
+    /// The session must already be initialized before calling this constructor.
+    pub fn new(client: &'a mut lsp::LspClient) -> Self {
+        CallGraphBuilder { client }
     }
 
     pub async fn generate_call_graph(&mut self, entry: &str) -> Result<CallGraph, CallGraphError> {
@@ -53,25 +62,13 @@ impl CodeAnalyzer {
         self.collect_call_graph_all_symbols().await
     }
 
-    pub async fn shutdown(&mut self) -> Result<(), CallGraphError> {
-        self.client.shutdown().await?;
-        Ok(())
-    }
-
-    pub async fn wait_notification(
-        &mut self,
-        timeout: Option<Duration>,
-    ) -> Result<Notification, CallGraphError> {
-        Ok(self.client.wait_notification(timeout).await?)
-    }
-
     async fn collect_call_graph_from(&mut self, entry: &str) -> Result<CallGraph, CallGraphError> {
         let function_symbols = self.client.workspace_symbol("").await?;
         let workspace_root_path = self.client.workspace_root_path().to_path_buf();
         let crate_name = self.client.crate_name().to_string();
 
         let Some(symbol) = symbol_locator::find_function_symbol_with_retry(
-            &mut self.client,
+            self.client,
             entry,
             20,
             Duration::from_millis(500),
@@ -99,12 +96,16 @@ impl CodeAnalyzer {
         let mut visited_edges: HashSet<(String, String)> = HashSet::new();
         let mut node_info: HashMap<String, (String, String)> = HashMap::new();
 
+        let meta_ctx = MetaContext {
+            function_symbols: &function_symbols,
+            workspace_root_path: &workspace_root_path,
+            crate_name: &crate_name,
+        };
+
         traverse_items(
-            &mut self.client,
+            self.client,
             roots,
-            &function_symbols,
-            &workspace_root_path,
-            &crate_name,
+            &meta_ctx,
             &mut visited_nodes,
             &mut visited_edges,
             &mut node_info,
@@ -132,8 +133,7 @@ impl CodeAnalyzer {
         // Fallback: when workspace/symbol returns nothing, scan source files directly.
         if workspace_functions.is_empty() {
             println!("  workspace/symbol returned no results, falling back to source file scan.");
-            workspace_functions =
-                symbol_locator::find_all_workspace_functions(&mut self.client).await?;
+            workspace_functions = symbol_locator::find_all_workspace_functions(self.client).await?;
         }
 
         if workspace_functions.is_empty() {
@@ -150,6 +150,12 @@ impl CodeAnalyzer {
         let mut visited_edges: HashSet<(String, String)> = HashSet::new();
         let mut node_info: HashMap<String, (String, String)> = HashMap::new();
 
+        let meta_ctx = MetaContext {
+            function_symbols: &function_symbols,
+            workspace_root_path: &workspace_root_path,
+            crate_name: &crate_name,
+        };
+
         for symbol in &workspace_functions {
             let roots = self
                 .client
@@ -157,11 +163,9 @@ impl CodeAnalyzer {
                 .await?;
 
             traverse_items(
-                &mut self.client,
+                self.client,
                 roots,
-                &function_symbols,
-                &workspace_root_path,
-                &crate_name,
+                &meta_ctx,
                 &mut visited_nodes,
                 &mut visited_edges,
                 &mut node_info,
@@ -285,9 +289,7 @@ fn call_item_key(item: &CallHierarchyItem) -> String {
 async fn traverse_items(
     client: &mut lsp::LspClient,
     initial_items: Vec<CallHierarchyItem>,
-    function_symbols: &[SymbolInformation],
-    workspace_root_path: &std::path::Path,
-    crate_name: &str,
+    meta_ctx: &MetaContext<'_>,
     visited_nodes: &mut HashSet<String>,
     visited_edges: &mut HashSet<(String, String)>,
     node_info: &mut HashMap<String, (String, String)>,
@@ -302,9 +304,9 @@ async fn traverse_items(
         let from_id = call_item_key(&item);
         let from_meta = meta_resolver::resolve_function_meta(
             &item,
-            function_symbols,
-            workspace_root_path,
-            crate_name,
+            meta_ctx.function_symbols,
+            meta_ctx.workspace_root_path,
+            meta_ctx.crate_name,
         );
         node_info.insert(
             from_id.clone(),
@@ -326,9 +328,9 @@ async fn traverse_items(
             let to_id = call_item_key(&child);
             let to_meta = meta_resolver::resolve_function_meta(
                 &child,
-                function_symbols,
-                workspace_root_path,
-                crate_name,
+                meta_ctx.function_symbols,
+                meta_ctx.workspace_root_path,
+                meta_ctx.crate_name,
             );
             node_info.insert(to_id.clone(), (to_meta.qualified_label, to_meta.group));
             visited_edges.insert((from_id.clone(), to_id.clone()));
