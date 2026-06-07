@@ -14,7 +14,7 @@
 //! ```ignore
 //! let (child, stdio) = spawn_lsp_process("rust-analyzer", &[])?;
 //! let mut client = LspClient::new(Box::new(stdio), workspace_root);
-//! client.initialize(Some(Duration::from_secs(10))).await?;
+//! client.initialize().await?;
 //! // ... call individual LSP methods ...
 //! client.shutdown().await?;
 //! ```
@@ -41,6 +41,7 @@ pub struct LspClient {
     workspace_root_path: PathBuf,
     #[allow(dead_code)]
     crate_name: String,
+    request_timeout: Duration,
 }
 
 impl LspClient {
@@ -65,6 +66,7 @@ impl LspClient {
             workspace_root,
             workspace_root_path,
             crate_name,
+            request_timeout: Duration::from_secs(10),
         }
     }
 
@@ -72,10 +74,7 @@ impl LspClient {
     ///
     /// Sends the `initialize` request and, on success, sends the `initialized`
     /// notification. Other methods must not be called before this succeeds.
-    pub async fn initialize(
-        &mut self,
-        timeout: Option<Duration>,
-    ) -> Result<InitializeResult, LspError> {
+    pub async fn initialize(&mut self) -> Result<InitializeResult, LspError> {
         let workspace_path = self
             .workspace_root_path
             .to_str()
@@ -85,7 +84,10 @@ impl LspClient {
             .message_builder
             .initialize(&workspace_path)
             .map_err(|e| LspError::InitializationFailed(e.to_string()))?;
-        let response = self.communicator.send_and_wait(request, timeout).await?;
+        let response = self
+            .communicator
+            .send_and_wait(request, Some(self.request_timeout))
+            .await?;
 
         let result = match response {
             Message::Response(resp) => {
@@ -132,12 +134,8 @@ impl LspClient {
         &mut self,
         query: &str,
     ) -> Result<Vec<SymbolInformation>, LspError> {
-        self.request(
-            "workspace/symbol",
-            serde_json::json!({"query": query}),
-            Some(Duration::from_secs(10)),
-        )
-        .await
+        self.request("workspace/symbol", serde_json::json!({"query": query}))
+            .await
     }
 
     /// Sends a `textDocument/prepareCallHierarchy` request.
@@ -152,12 +150,8 @@ impl LspClient {
             "position": symbol.location.range.start
         });
 
-        self.request(
-            "textDocument/prepareCallHierarchy",
-            params,
-            Some(Duration::from_secs(10)),
-        )
-        .await
+        self.request("textDocument/prepareCallHierarchy", params)
+            .await
     }
 
     /// Sends a `callHierarchy/outgoingCalls` request.
@@ -168,7 +162,6 @@ impl LspClient {
         self.request(
             "callHierarchy/outgoingCalls",
             serde_json::json!({"item": item}),
-            Some(Duration::from_secs(10)),
         )
         .await
     }
@@ -211,22 +204,25 @@ impl LspClient {
             }
         });
 
-        self.request(
-            "textDocument/documentSymbol",
-            params,
-            Some(Duration::from_secs(10)),
-        )
-        .await
+        self.request("textDocument/documentSymbol", params).await
     }
 
     /// Waits for the next server-to-client notification.
     ///
     /// Returns a timeout error if `timeout` is `Some` and the duration elapses.
+    #[allow(dead_code)]
     pub async fn wait_notification(
         &mut self,
         timeout: Option<Duration>,
     ) -> Result<Notification, LspError> {
         self.communicator.wait_notification(timeout).await
+    }
+
+    /// Returns the next buffered server-to-client notification without blocking.
+    ///
+    /// Returns `None` immediately if no notification is currently available.
+    pub(crate) fn try_get_notification(&mut self) -> Option<Notification> {
+        self.communicator.try_get_notification()
     }
 
     /// Shuts down the LSP session gracefully.
@@ -240,7 +236,7 @@ impl LspClient {
 
         let response = self
             .communicator
-            .send_and_wait(request, Some(Duration::from_secs(10)))
+            .send_and_wait(request, Some(self.request_timeout))
             .await?;
         let shutdown_result = Self::expect_response("shutdown", response)?;
         if shutdown_result.is_some() {
@@ -286,12 +282,7 @@ impl LspClient {
     /// 1. Builds the request.
     /// 2. Sends it via the Protocol Layer and awaits the response.
     /// 3. Matches the response variant and deserializes the result into `R`.
-    async fn request<P, R>(
-        &mut self,
-        method: &str,
-        params: P,
-        timeout: Option<Duration>,
-    ) -> Result<R, LspError>
+    async fn request<P, R>(&mut self, method: &str, params: P) -> Result<R, LspError>
     where
         P: serde::Serialize,
         R: serde::de::DeserializeOwned,
@@ -303,7 +294,10 @@ impl LspClient {
                 method: method.to_string(),
                 reason: e.to_string(),
             })?;
-        let response = self.communicator.send_and_wait(request, timeout).await?;
+        let response = self
+            .communicator
+            .send_and_wait(request, Some(self.request_timeout))
+            .await?;
 
         match response {
             Message::Response(resp) => {

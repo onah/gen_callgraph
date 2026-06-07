@@ -75,10 +75,16 @@ pub trait FramedTransport: Send + Sync {
     /// Waits for the next server-to-client notification.
     ///
     /// Returns a timeout error if `timeout` is `Some` and the duration elapses.
+    #[allow(dead_code)]
     async fn wait_notification(
         &mut self,
         timeout: Option<Duration>,
     ) -> Result<Notification, LspError>;
+
+    /// Returns the next buffered server-to-client notification without blocking.
+    ///
+    /// Returns `None` immediately if no notification is available.
+    fn try_get_notification(&mut self) -> Option<Notification>;
 }
 
 // ---------------------------------------------------------------------------
@@ -442,6 +448,10 @@ impl FramedTransport for FramedBox {
                 reason: String::from("notification channel closed"),
             }),
         }
+    }
+
+    fn try_get_notification(&mut self) -> Option<Notification> {
+        self.notification_rx.try_lock().ok()?.try_recv().ok()
     }
 }
 

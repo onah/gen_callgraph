@@ -43,7 +43,7 @@
 //!
 //! let (child, stdio) = spawn_lsp_process("rust-analyzer", &[])?;
 //! let mut client = LspClient::new(Box::new(stdio), workspace_root);
-//! client.initialize(Some(Duration::from_secs(10))).await?;
+//! client.initialize().await?;
 //! let symbols = client.workspace_symbol("my_function").await?;
 //! client.shutdown().await?;
 //! ```

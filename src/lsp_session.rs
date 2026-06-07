@@ -39,7 +39,7 @@ impl LspSession {
             .map_err(|e| LspError::ProcessStartFailed(e.to_string()))?;
 
         let mut client = lsp::LspClient::new(Box::new(stdio), config.workspace.clone());
-        client.initialize(Some(Duration::from_secs(10))).await?;
+        client.initialize().await?;
         println!("Initialization Success");
 
         wait_for_indexing(&mut client).await?;
@@ -65,42 +65,77 @@ impl LspSession {
     }
 }
 
-/// Polls for server notifications until indexing appears complete, then waits briefly
-/// for the index to settle.
+/// Polls for `$/progress` notifications until all open progress tokens are closed,
+/// then waits 500 ms for a quiet period to confirm completion.
 ///
-/// rust-analyzer streams notifications while indexing. We wait until 500 ms passes
-/// without a notification (after seeing at least 5), which indicates the burst is over,
-/// then sleep an additional 2 s.
+/// rust-analyzer sends `$/progress` with `kind: "begin"` when an indexing phase starts
+/// and `kind: "end"` when it finishes. This function tracks the count of open tokens
+/// and exits once all have been closed and no new notifications arrive for 500 ms.
 ///
-/// Returns `Err` if the LSP transport fails (e.g. rust-analyzer process exits unexpectedly).
-/// A `Timeout` — no notification arriving within 500 ms — is a normal quiet period, not an error.
+/// Falls back to a 3 s no-notification timeout (small projects that finish quickly)
+/// and a hard 120 s deadline in case the server never signals completion.
 async fn wait_for_indexing(client: &mut lsp::LspClient) -> anyhow::Result<()> {
     println!("Waiting for rust-analyzer to index the workspace...");
-    for i in 0..50 {
-        match client
-            .wait_notification(Some(Duration::from_millis(500)))
-            .await
-        {
-            Ok(_) => {
-                if i % 5 == 0 {
-                    println!("  Still indexing... ({} notifications received)", i + 1);
+
+    let mut active_progress: u32 = 0;
+    let mut seen_any_progress = false;
+    let mut all_done_since: Option<std::time::Instant> = None;
+    let mut last_notification_at = std::time::Instant::now();
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+
+    loop {
+        if std::time::Instant::now() >= deadline {
+            println!("  Timed out waiting for indexing (120 s), continuing");
+            break;
+        }
+
+        match client.try_get_notification() {
+            Some(notification) => {
+                last_notification_at = std::time::Instant::now();
+
+                if notification.method == "$/progress" {
+                    let kind = notification
+                        .params
+                        .get("value")
+                        .and_then(|v| v.get("kind"))
+                        .and_then(|k| k.as_str());
+
+                    match kind {
+                        Some("begin") => {
+                            active_progress += 1;
+                            seen_any_progress = true;
+                            all_done_since = None;
+                            println!("  Indexing in progress (active: {})", active_progress);
+                        }
+                        Some("end") if active_progress > 0 => {
+                            active_progress -= 1;
+                            if active_progress == 0 {
+                                all_done_since = Some(std::time::Instant::now());
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
-            Err(LspError::Timeout { .. }) => {
-                if i > 5 {
-                    println!("  Indexing appears complete (no notifications for 500ms)");
+            None => {
+                // All progress tokens closed — wait for a 500 ms quiet period to confirm.
+                if seen_any_progress {
+                    if let Some(since) = all_done_since {
+                        if since.elapsed() >= Duration::from_millis(500) {
+                            println!("  Indexing complete");
+                            break;
+                        }
+                    }
+                }
+                // Fallback: no notifications at all for 3 s (e.g. very small project).
+                if last_notification_at.elapsed() >= Duration::from_secs(3) {
+                    println!("  No notifications for 3 s, assuming indexing complete");
                     break;
                 }
-            }
-            Err(e) => {
-                return Err(anyhow::anyhow!(
-                    "LSP transport failed during indexing: {}",
-                    e
-                ));
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
         }
     }
-    println!("Waiting additional 2 seconds for indexing to complete...");
-    tokio::time::sleep(Duration::from_secs(2)).await;
+
     Ok(())
 }
