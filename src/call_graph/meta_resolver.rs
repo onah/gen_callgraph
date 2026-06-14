@@ -325,29 +325,80 @@ fn infer_module_owner_from_uri(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lsp_types::{CallHierarchyItem, Location, Position, Range, SymbolInformation, SymbolKind, Url};
+
+    fn make_item(name: &str, uri: &str, line: u32, detail: Option<&str>) -> CallHierarchyItem {
+        let url = Url::parse(uri).unwrap();
+        let pos = Position { line, character: 0 };
+        let range = Range { start: pos, end: pos };
+        CallHierarchyItem {
+            name: name.to_string(),
+            kind: SymbolKind::FUNCTION,
+            tags: None,
+            detail: detail.map(|s| s.to_string()),
+            uri: url,
+            range,
+            selection_range: range,
+            data: None,
+        }
+    }
+
+    #[allow(deprecated)]
+    fn make_symbol(name: &str, uri: &str, line: u32, container: Option<&str>) -> SymbolInformation {
+        let url = Url::parse(uri).unwrap();
+        let pos = Position { line, character: 0 };
+        SymbolInformation {
+            name: name.to_string(),
+            kind: SymbolKind::FUNCTION,
+            tags: None,
+            deprecated: None,
+            location: Location {
+                uri: url,
+                range: Range { start: pos, end: pos },
+            },
+            container_name: container.map(|s| s.to_string()),
+        }
+    }
+
+    // --- extract_from_detail ---
 
     #[test]
     fn test_extract_from_detail_simple_impl() {
-        let detail = "impl MyStruct";
-        let meta = extract_from_detail(detail, "my_method").unwrap();
+        let meta = extract_from_detail("impl MyStruct", "my_method").unwrap();
         assert_eq!(meta.qualified_label, "MyStruct::my_method");
         assert_eq!(meta.group, "MyStruct");
     }
 
     #[test]
     fn test_extract_from_detail_generic_impl() {
-        let detail = "impl <T> MyStruct<T>";
-        let meta = extract_from_detail(detail, "my_method").unwrap();
+        let meta = extract_from_detail("impl <T> MyStruct<T>", "my_method").unwrap();
         assert_eq!(meta.qualified_label, "MyStruct::my_method");
         assert_eq!(meta.group, "MyStruct");
     }
 
     #[test]
     fn test_extract_from_detail_trait_impl() {
-        let detail = "impl Display for MyStruct";
-        let meta = extract_from_detail(detail, "fmt").unwrap();
+        let meta = extract_from_detail("impl Display for MyStruct", "fmt").unwrap();
         assert_eq!(meta.qualified_label, "MyStruct::fmt");
         assert_eq!(meta.group, "MyStruct");
+    }
+
+    #[test]
+    fn test_extract_from_detail_returns_none_for_fn_prefix() {
+        assert!(extract_from_detail("fn my_func", "my_func").is_none());
+    }
+
+    #[test]
+    fn test_extract_from_detail_returns_none_when_no_impl_space() {
+        // "impl<T>" without a trailing space does not match the "impl " prefix strip
+        assert!(extract_from_detail("impl<T> MyStruct<T>", "my_method").is_none());
+    }
+
+    // --- extract_type_name ---
+
+    #[test]
+    fn test_extract_type_name_simple() {
+        assert_eq!(extract_type_name("MyStruct"), "MyStruct");
     }
 
     #[test]
@@ -361,7 +412,236 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_type_name_simple() {
-        assert_eq!(extract_type_name("MyStruct"), "MyStruct");
+    fn test_extract_type_name_immutable_reference() {
+        assert_eq!(extract_type_name("&MyStruct"), "MyStruct");
+    }
+
+    // --- parse_impl_target ---
+
+    #[test]
+    fn test_parse_impl_target_simple_struct() {
+        assert_eq!(parse_impl_target("MyStruct").unwrap(), "MyStruct");
+    }
+
+    #[test]
+    fn test_parse_impl_target_trait_impl() {
+        assert_eq!(parse_impl_target("Display for MyStruct").unwrap(), "MyStruct");
+    }
+
+    #[test]
+    fn test_parse_impl_target_generic_struct() {
+        assert_eq!(parse_impl_target("<T> MyStruct<T>").unwrap(), "MyStruct");
+    }
+
+    // --- looks_like_impl_header_start ---
+
+    #[test]
+    fn test_impl_header_start_plain_impl() {
+        assert!(looks_like_impl_header_start("impl MyStruct {"));
+    }
+
+    #[test]
+    fn test_impl_header_start_generic_impl() {
+        assert!(looks_like_impl_header_start("impl<T> MyStruct<T> {"));
+    }
+
+    #[test]
+    fn test_impl_header_start_unsafe_impl() {
+        assert!(looks_like_impl_header_start("unsafe impl Sync for MyStruct {}"));
+    }
+
+    #[test]
+    fn test_impl_header_start_unsafe_generic_impl() {
+        assert!(looks_like_impl_header_start("unsafe impl<T> Send for MyStruct<T> {}"));
+    }
+
+    #[test]
+    fn test_impl_header_start_indented() {
+        assert!(looks_like_impl_header_start("    impl MyStruct {"));
+    }
+
+    #[test]
+    fn test_impl_header_start_rejects_fn() {
+        assert!(!looks_like_impl_header_start("fn my_func() {"));
+    }
+
+    #[test]
+    fn test_impl_header_start_rejects_empty_string() {
+        assert!(!looks_like_impl_header_start(""));
+    }
+
+    // --- find_nearest_fn_line ---
+
+    #[test]
+    fn test_find_nearest_fn_line_at_exact_position() {
+        let lines = vec!["fn other() {}", "    fn my_fn() {", "}"];
+        assert_eq!(find_nearest_fn_line(&lines, 1, "my_fn"), Some(1));
+    }
+
+    #[test]
+    fn test_find_nearest_fn_line_searches_backward() {
+        let lines = vec!["fn my_fn() {", "    let x = 1;", "    x", "}"];
+        assert_eq!(find_nearest_fn_line(&lines, 3, "my_fn"), Some(0));
+    }
+
+    #[test]
+    fn test_find_nearest_fn_line_returns_none_when_absent() {
+        let lines = vec!["fn other() {}", "    let x = 1;"];
+        assert_eq!(find_nearest_fn_line(&lines, 1, "nonexistent"), None);
+    }
+
+    // --- collect_header_until_brace ---
+
+    #[test]
+    fn test_collect_header_single_line_with_brace() {
+        let lines = vec!["impl MyStruct {", "    fn foo() {}", "}"];
+        let header = collect_header_until_brace(&lines, 0);
+        assert!(header.contains("impl MyStruct"));
+        assert!(header.contains('{'));
+        assert!(!header.contains("fn foo"));
+    }
+
+    #[test]
+    fn test_collect_header_multiline_stops_at_brace() {
+        let lines = vec!["impl MyStruct", "{", "    fn foo() {}", "}"];
+        let header = collect_header_until_brace(&lines, 0);
+        assert!(header.contains("impl MyStruct"));
+        assert!(header.contains('{'));
+        assert!(!header.contains("fn foo"));
+    }
+
+    // --- header_block_contains_line ---
+
+    #[test]
+    fn test_header_block_contains_inner_line() {
+        let lines = vec!["impl MyStruct {", "    fn foo() {}", "}"];
+        assert!(header_block_contains_line(&lines, 0, 1));
+    }
+
+    #[test]
+    fn test_header_block_excludes_line_after_closing_brace() {
+        let lines = vec!["impl MyStruct {", "    fn foo() {}", "}", "fn bar() {}"];
+        assert!(!header_block_contains_line(&lines, 0, 3));
+    }
+
+    // --- parse_impl_owner ---
+
+    #[test]
+    fn test_parse_impl_owner_simple_struct() {
+        assert_eq!(parse_impl_owner("impl MyStruct {").unwrap(), "MyStruct");
+    }
+
+    #[test]
+    fn test_parse_impl_owner_trait_impl() {
+        assert_eq!(
+            parse_impl_owner("impl Display for MyStruct {").unwrap(),
+            "MyStruct"
+        );
+    }
+
+    #[test]
+    fn test_parse_impl_owner_generic_struct() {
+        assert_eq!(parse_impl_owner("impl<T> MyStruct<T> {").unwrap(), "MyStruct");
+    }
+
+    // --- infer_module_owner_from_uri ---
+
+    #[test]
+    fn test_module_owner_main_rs_returns_crate_name() {
+        let item = make_item("my_fn", "file:///workspace/src/main.rs", 0, None);
+        let result = infer_module_owner_from_uri(&item, Path::new("/workspace"), "my_crate");
+        assert_eq!(result.unwrap(), "my_crate");
+    }
+
+    #[test]
+    fn test_module_owner_lib_rs_returns_crate_name() {
+        let item = make_item("my_fn", "file:///workspace/src/lib.rs", 0, None);
+        let result = infer_module_owner_from_uri(&item, Path::new("/workspace"), "my_crate");
+        assert_eq!(result.unwrap(), "my_crate");
+    }
+
+    #[test]
+    fn test_module_owner_regular_src_file() {
+        let item = make_item("my_fn", "file:///workspace/src/renderer.rs", 0, None);
+        let result = infer_module_owner_from_uri(&item, Path::new("/workspace"), "my_crate");
+        assert_eq!(result.unwrap(), "renderer");
+    }
+
+    #[test]
+    fn test_module_owner_nested_module() {
+        let item = make_item("my_fn", "file:///workspace/src/lsp/client.rs", 0, None);
+        let result = infer_module_owner_from_uri(&item, Path::new("/workspace"), "my_crate");
+        assert_eq!(result.unwrap(), "lsp::client");
+    }
+
+    #[test]
+    fn test_module_owner_mod_rs_strips_filename() {
+        let item = make_item("my_fn", "file:///workspace/src/lsp/mod.rs", 0, None);
+        let result = infer_module_owner_from_uri(&item, Path::new("/workspace"), "my_crate");
+        assert_eq!(result.unwrap(), "lsp");
+    }
+
+    #[test]
+    fn test_module_owner_outside_src_returns_none() {
+        let item = make_item("my_fn", "file:///workspace/tests/helper.rs", 0, None);
+        let result = infer_module_owner_from_uri(&item, Path::new("/workspace"), "my_crate");
+        assert!(result.is_none());
+    }
+
+    // --- resolve_function_meta ---
+
+    #[test]
+    fn test_resolve_meta_priority1_uses_container_name() {
+        let item = make_item("my_method", "file:///workspace/src/foo.rs", 5, None);
+        let symbol = make_symbol("my_method", "file:///workspace/src/foo.rs", 5, Some("MyStruct"));
+        let meta = resolve_function_meta(&item, &[symbol], Path::new("/workspace"), "my_crate");
+        assert_eq!(meta.qualified_label, "MyStruct::my_method");
+        assert_eq!(meta.group, "MyStruct");
+    }
+
+    #[test]
+    fn test_resolve_meta_priority1_skips_empty_container_name() {
+        // container_name is present but empty — should fall through to detail (priority 2)
+        let item = make_item(
+            "my_method",
+            "file:///workspace/src/foo.rs",
+            5,
+            Some("impl MyStruct"),
+        );
+        let symbol = make_symbol("my_method", "file:///workspace/src/foo.rs", 5, Some(""));
+        let meta = resolve_function_meta(&item, &[symbol], Path::new("/workspace"), "my_crate");
+        assert_eq!(meta.qualified_label, "MyStruct::my_method");
+        assert_eq!(meta.group, "MyStruct");
+    }
+
+    #[test]
+    fn test_resolve_meta_priority2_uses_detail_when_no_symbol() {
+        let item = make_item(
+            "my_method",
+            "file:///workspace/src/foo.rs",
+            5,
+            Some("impl MyStruct"),
+        );
+        let meta = resolve_function_meta(&item, &[], Path::new("/workspace"), "my_crate");
+        assert_eq!(meta.qualified_label, "MyStruct::my_method");
+        assert_eq!(meta.group, "MyStruct");
+    }
+
+    #[test]
+    fn test_resolve_meta_priority4_uses_module_path() {
+        // No container_name, no detail, no source file match → falls through to file path
+        let item = make_item("my_fn", "file:///workspace/src/renderer.rs", 0, None);
+        let meta = resolve_function_meta(&item, &[], Path::new("/workspace"), "my_crate");
+        assert_eq!(meta.qualified_label, "renderer::my_fn");
+        assert_eq!(meta.group, "renderer");
+    }
+
+    #[test]
+    fn test_resolve_meta_fallback_uses_functions_group() {
+        // No container_name, no detail, file outside src/ → default group
+        let item = make_item("my_fn", "file:///workspace/tests/helper.rs", 0, None);
+        let meta = resolve_function_meta(&item, &[], Path::new("/workspace"), "my_crate");
+        assert_eq!(meta.qualified_label, "my_fn");
+        assert_eq!(meta.group, "functions");
     }
 }
